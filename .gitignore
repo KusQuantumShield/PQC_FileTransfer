@@ -1,0 +1,7 @@
+./liboqs
+./liboqs-*
+__pycache__
+./test.txt
+./test_*.txt
+./*.log
+./received_files
