@@ -1,7 +1,7 @@
-./liboqs
-./liboqs-*
+/liboqs/
+/liboqs-python/
 __pycache__
-./test.txt
-./test_*.txt
-./*.log
-./received_files
+/test.txt
+/test_*.txt
+/*.log
+/received_files/
