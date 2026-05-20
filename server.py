@@ -59,7 +59,7 @@ def handle_client(conn: socket.socket, addr) -> bool:
         utils.log("PASS", "KEM", f"핸드셰이크 완료 (소요 시간: {kem_end_time - kem_start_time:.4f} 초)")
 
         # =========================================================
-        # [단계 2] 전송될 파일의 메타데이터 수신
+        # [단계 2] 전송될 파일의 초기 메타데이터 수신
         # =========================================================
         # 파일명 수신 (디렉토리 탐색 공격, Path Traversal 공격을 막기 위해 os.path.basename 사용)
         filename_bytes = utils.recv_with_length(conn)
@@ -71,29 +71,21 @@ def handle_client(conn: socket.socket, addr) -> bool:
 
         # 파일 크기 수신 (8바이트 고정 길이, Unsigned long long)
         original_filesize = struct.unpack("!Q", utils.recv_exact(conn, 8))[0]
-        # 원본 파일의 예상 해시 수신 (64바이트 문자열)
-        expected_hash = utils.recv_exact(conn, 64).decode("utf-8")
 
         utils.log("INFO", "FILE", f"파일명 수신 완료: {filename}")
         utils.log("INFO", "FILE", f"예상 파일 크기: {original_filesize} 바이트")
-        utils.log("INFO", "HASH", f"예상 SHA-256: {expected_hash}")
 
         # =========================================================
-        # [단계 3] 클라이언트의 메타데이터 전자서명 수신
+        # [단계 3] 대용량 파일 청크(Chunk) 수신 및 복호화
         # =========================================================
-        # 클라이언트가 서명 생성 시 사용한 공개키 수신
-        sig_public_key = utils.recv_with_length(conn)
-        utils.log("INFO", "SIGN", f"서명 공개키 수신 완료 ({len(sig_public_key)} 바이트)")
+        # 저장 디렉토리가 없으면 생성 (임시 파일도 이곳에 저장하기 위함)
+        if not os.path.exists(SAVE_DIR):
+            os.makedirs(SAVE_DIR)
+            utils.log("INFO", "SYSTEM", f"디렉토리 생성됨: {SAVE_DIR}")
 
-        # 실제 서명 데이터 수신
-        signature = utils.recv_with_length(conn)
-        utils.log("INFO", "SIGN", f"서명 수신 완료 ({len(signature)} 바이트)")
-
-        # =========================================================
-        # [단계 4] 대용량 파일 청크(Chunk) 수신 및 복호화
-        # =========================================================
         # 네트워크 전송 중에는 메모리에 올리지 않고 임시 파일(Temp file)에 바로 기록
-        temp_file = tempfile.NamedTemporaryFile(delete=False)
+        # /tmp 파티션 용량 부족을 막고, 빠른 이동(shutil.move)을 위해 SAVE_DIR 내부에 생성
+        temp_file = tempfile.NamedTemporaryFile(dir=SAVE_DIR, delete=False)
         temp_path = temp_file.name
 
         utils.log("INFO", "FILE", f"임시 파일 생성됨: {temp_path}")
@@ -163,6 +155,22 @@ def handle_client(conn: socket.socket, addr) -> bool:
         utils.log("PASS", "CHUNK", f"모든 청크 수신 완료 (소요 시간: {transfer_end_time - transfer_start_time:.4f} 초)")
 
         # =========================================================
+        # [단계 4] 후반 메타데이터(해시) 및 클라이언트 서명 수신
+        # =========================================================
+        
+        # 원본 파일의 예상 해시 수신 (64바이트 문자열)
+        expected_hash = utils.recv_exact(conn, 64).decode("utf-8")
+        utils.log("INFO", "HASH", f"클라이언트가 전송한 원본 SHA-256: {expected_hash}")
+
+        # 클라이언트가 서명 생성 시 사용한 공개키 수신
+        sig_public_key = utils.recv_with_length(conn)
+        utils.log("INFO", "SIGN", f"서명 공개키 수신 완료 ({len(sig_public_key)} 바이트)")
+
+        # 실제 서명 데이터 수신
+        signature = utils.recv_with_length(conn)
+        utils.log("INFO", "SIGN", f"서명 수신 완료 ({len(signature)} 바이트)")
+
+        # =========================================================
         # [단계 5] 파일 무결성 및 서명 검증
         # =========================================================
         # 5-1. 사이즈 검증
@@ -217,11 +225,6 @@ def handle_client(conn: socket.socket, addr) -> bool:
             return False
 
         utils.log("INFO", "TRANSFER", "CLIENT_DONE 신호 수신 완료")
-
-        # 저장 디렉토리가 없으면 생성 (자동화)
-        if not os.path.exists(SAVE_DIR):
-            os.makedirs(SAVE_DIR)
-            utils.log("INFO", "SYSTEM", f"디렉토리 생성됨: {SAVE_DIR}")
 
         # 최종 저장 경로 조합 후 임시 파일 이동
         save_path = os.path.join(SAVE_DIR, filename)

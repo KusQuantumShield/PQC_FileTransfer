@@ -67,54 +67,32 @@ def main():
             utils.log("PASS", "KEM", f"핸드셰이크 완료 (소요 시간: {kem_end_time - kem_start_time:.4f} 초)")
 
             # =========================================================
-            # [단계 2] 전송할 파일의 메타데이터 생성 및 전송
+            # [단계 2] 전송할 파일의 초기 메타데이터 전송
             # =========================================================
             filename = os.path.basename(file_path)
             filename_bytes = filename.encode("utf-8")
             filesize = os.path.getsize(file_path)
-            file_hash = utils.sha256_file(file_path)
 
             utils.log("INFO", "FILE", f"선택된 파일: {filename}")
             utils.log("INFO", "FILE", f"파일 크기: {filesize} 바이트")
-            utils.log("INFO", "HASH", f"파일 SHA-256: {file_hash}")
 
-            # 파일명, 파일 크기, 파일 해시를 차례대로 서버에 전송
+            # 파일명, 파일 크기를 차례대로 서버에 전송 (해시는 아직 계산 안됨)
             utils.send_with_length(s, filename_bytes)
             s.sendall(struct.pack("!Q", filesize))
-            s.sendall(file_hash.encode("utf-8"))
 
-            utils.log("INFO", "FILE", "파일 메타데이터 전송 완료")
-
-            # =========================================================
-            # [단계 3] 메타데이터에 대한 전자서명 생성 (데이터 인증)
-            # =========================================================
-            metadata_for_sign = (filename + str(filesize) + file_hash).encode("utf-8")
-
-            sign_start_time = time.perf_counter()
-            with oqs.Signature(utils.SIG_ALG) as signer:
-                sig_public_key = signer.generate_keypair()
-                signature = signer.sign(metadata_for_sign)
-            sign_end_time = time.perf_counter()
-
-            utils.log("PASS", "SIGN", f"ML-DSA 서명 생성 완료 (소요 시간: {sign_end_time - sign_start_time:.4f} 초)")
-            utils.log("INFO", "SIGN", f"서명 공개키 크기: {len(sig_public_key)} 바이트")
-            utils.log("INFO", "SIGN", f"서명 크기: {len(signature)} 바이트")
-
-            # 서버가 서명을 검증할 수 있도록 클라이언트가 생성한 서명 검증용 공개키를 전송
-            utils.send_with_length(s, sig_public_key)
-            utils.log("INFO", "SIGN", "서명 공개키 전송 완료")
-
-            # 생성된 서명 데이터를 전송
-            utils.send_with_length(s, signature)
-            utils.log("INFO", "SIGN", "서명 전송 완료")
+            utils.log("INFO", "FILE", "초기 파일 메타데이터 전송 완료")
 
             # =========================================================
-            # [단계 4] 대칭키 암호화(AES-GCM) 기반 대용량 파일 전송
+            # [단계 3] 대칭키 암호화(AES-GCM) 기반 대용량 파일 전송 및 해시 계산
             # =========================================================
             aesgcm = AESGCM(session_key)
             use_compression = True
             chunk_index = 0
             sent_size = 0
+            
+            # 스트리밍 해시 계산을 위한 초기화
+            import hashlib
+            file_hasher = hashlib.sha256()
 
             utils.log("INFO", "CHUNK", f"청크 크기: {utils.CHUNK_SIZE} 바이트")
             utils.log("INFO", "CHUNK", "청크 전송 시작")
@@ -128,6 +106,10 @@ def main():
                         break
 
                     original_chunk_size = len(chunk)
+                    
+                    # 실시간 해시 업데이트
+                    file_hasher.update(chunk)
+                    
                     flags = 0x01 if use_compression else 0x00
 
                     if use_compression:
@@ -147,8 +129,38 @@ def main():
                     chunk_index += 1
 
             transfer_end_time = time.perf_counter()
+            file_hash = file_hasher.hexdigest()
+            
             utils.log("PASS", "CHUNK", "모든 청크 전송 완료")
             utils.log("RESULT", "TRANSFER", f"파일 데이터 전송 완료 (소요 시간: {transfer_end_time - transfer_start_time:.4f} 초)")
+            utils.log("INFO", "HASH", f"최종 파일 SHA-256: {file_hash}")
+
+            # =========================================================
+            # [단계 4] 후반 메타데이터 전송 및 전자서명 생성
+            # =========================================================
+            # 계산된 최종 파일 해시 전송
+            s.sendall(file_hash.encode("utf-8"))
+            
+            # 무결성 검증을 위한 서명 데이터 조합
+            metadata_for_sign = (filename + str(filesize) + file_hash).encode("utf-8")
+
+            sign_start_time = time.perf_counter()
+            with oqs.Signature(utils.SIG_ALG) as signer:
+                sig_public_key = signer.generate_keypair()
+                signature = signer.sign(metadata_for_sign)
+            sign_end_time = time.perf_counter()
+
+            utils.log("PASS", "SIGN", f"ML-DSA 서명 생성 완료 (소요 시간: {sign_end_time - sign_start_time:.4f} 초)")
+            utils.log("INFO", "SIGN", f"서명 공개키 크기: {len(sig_public_key)} 바이트")
+            utils.log("INFO", "SIGN", f"서명 크기: {len(signature)} 바이트")
+
+            # 서버가 서명을 검증할 수 있도록 클라이언트가 생성한 서명 검증용 공개키를 전송
+            utils.send_with_length(s, sig_public_key)
+            utils.log("INFO", "SIGN", "서명 공개키 전송 완료")
+
+            # 생성된 서명 데이터를 전송
+            utils.send_with_length(s, signature)
+            utils.log("INFO", "SIGN", "서명 전송 완료")
 
             # =========================================================
             # [단계 5] 마무리 및 종료 신호 전송
