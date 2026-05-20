@@ -26,6 +26,9 @@ def handle_client(conn: socket.socket, addr) -> bool:
         # =========================================================
         # [단계 1] 핸드셰이크: KEM 키 생성 및 교환
         # =========================================================
+        import time
+        kem_start_time = time.perf_counter()
+        
         # 서버 측에서 먼저 일회용 양자 내성 공개키/개인키 쌍을 생성
         with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
             public_key = kem.generate_keypair()
@@ -51,8 +54,9 @@ def handle_client(conn: socket.socket, addr) -> bool:
 
         # 교환된 공유 비밀키를 HKDF를 통해 32바이트 세션 키로 변환
         session_key = utils.derive_key(shared_secret)
+        kem_end_time = time.perf_counter()
         utils.log("PASS", "KEY", "Session key derived by HKDF")
-        utils.log("PASS", "KEM", "Handshake complete")
+        utils.log("PASS", "KEM", f"Handshake complete (Time: {kem_end_time - kem_start_time:.4f} seconds)")
 
         # =========================================================
         # [단계 2] 전송될 파일의 메타데이터 수신
@@ -101,6 +105,8 @@ def handle_client(conn: socket.socket, addr) -> bool:
 
         received_size = 0         # 현재까지 온전하게 복호화되어 기록된 바이트 수
         expected_chunk_index = 0  # 예상되는 다음 청크의 번호 (순서가 뒤바뀌는지 검증)
+
+        transfer_start_time = time.perf_counter()
 
         while received_size < original_filesize:
             # 1. 13바이트 고정 크기의 청크 헤더 수신
@@ -152,8 +158,9 @@ def handle_client(conn: socket.socket, addr) -> bool:
             utils.log("INFO", "CHUNK", f"Received chunk {chunk_index} ({received_size}/{original_filesize} bytes)")
             expected_chunk_index += 1
 
+        transfer_end_time = time.perf_counter()
         temp_file.close() # 쓰기가 완료되었으므로 임시 파일 스트림을 닫음
-        utils.log("PASS", "CHUNK", "All chunks received successfully")
+        utils.log("PASS", "CHUNK", f"All chunks received successfully (Time: {transfer_end_time - transfer_start_time:.4f} seconds)")
 
         # =========================================================
         # [단계 5] 파일 무결성 및 서명 검증

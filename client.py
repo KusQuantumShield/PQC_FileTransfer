@@ -30,6 +30,9 @@ def main():
             s.connect((utils.SERVER_IP, utils.PORT))
             utils.log("INFO", "CONNECT", f"Connected to server {utils.SERVER_IP}:{utils.PORT}")
 
+            import time
+            kem_start_time = time.perf_counter()
+
             # 서버가 보낸 양자 내성 공개키(Public Key)를 수신
             pk_len_bytes = utils.recv_exact(s, 4)
             pk_len = struct.unpack("!I", pk_len_bytes)[0]
@@ -54,8 +57,9 @@ def main():
 
             # 교환된 공유 비밀키(shared_secret)를 HKDF를 통해 안전한 32바이트 세션 키로 도출
             session_key = utils.derive_key(shared_secret)
+            kem_end_time = time.perf_counter()
             utils.log("PASS", "KEY", "Session key derived by HKDF")
-            utils.log("PASS", "KEM", "Handshake complete")
+            utils.log("PASS", "KEM", f"Handshake complete (Time: {kem_end_time - kem_start_time:.4f} seconds)")
 
             # =========================================================
             # [단계 2] 전송할 파일의 메타데이터 생성 및 전송
@@ -108,6 +112,8 @@ def main():
             utils.log("INFO", "CHUNK", f"Chunk size: {utils.CHUNK_SIZE} bytes")
             utils.log("INFO", "CHUNK", "Chunk transfer started")
 
+            transfer_start_time = time.perf_counter()
+
             with open(file_path, "rb") as f:
                 while True:
                     chunk = f.read(utils.CHUNK_SIZE)
@@ -133,8 +139,9 @@ def main():
                     utils.log("INFO", "CHUNK", f"Sent chunk {chunk_index} ({sent_size}/{filesize} bytes)")
                     chunk_index += 1
 
+            transfer_end_time = time.perf_counter()
             utils.log("PASS", "CHUNK", "All chunks sent successfully")
-            utils.log("RESULT", "TRANSFER", "File data transfer completed")
+            utils.log("RESULT", "TRANSFER", f"File data transfer completed (Time: {transfer_end_time - transfer_start_time:.4f} seconds)")
 
             # =========================================================
             # [단계 5] 마무리 및 종료 신호 전송
