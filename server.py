@@ -121,9 +121,10 @@ def handle_client(conn: socket.socket, addr) -> bool:
             # 2. 파악된 페이로드 길이만큼 데이터(Nonce + 암호문) 수신
             payload = utils.recv_exact(conn, payload_len)
 
-            # 페이로드 분리: 처음 12바이트는 암호화 시 사용된 Nonce(IV), 나머지는 실제 암호문 데이터
-            nonce = payload[:12]
-            encrypted_chunk = payload[12:]
+            # 페이로드 분리 (memoryview를 사용하여 대용량 암호문의 메모리 복사 제거)
+            payload_view = memoryview(payload)
+            nonce = bytes(payload_view[:12])
+            encrypted_chunk = payload_view[12:]
 
             # 3. AES-GCM을 사용하여 청크 데이터 복호화 
             try:

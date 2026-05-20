@@ -113,16 +113,17 @@ def main():
                     flags = 0x01 if use_compression else 0x00
 
                     if use_compression:
-                        chunk = zlib.compress(chunk)
+                        chunk = zlib.compress(chunk, level=1)
 
                     nonce = os.urandom(12)
                     encrypted_chunk = aesgcm.encrypt(nonce, chunk, None)
-                    payload = nonce + encrypted_chunk
+                    payload_len = len(nonce) + len(encrypted_chunk)
 
                     # [청크 헤더 구조: 총 13바이트]
-                    s.sendall(struct.pack("!BQI", flags, chunk_index, len(payload)))
-                    # [청크 데이터 전송]
-                    s.sendall(payload)
+                    s.sendall(struct.pack("!BQI", flags, chunk_index, payload_len))
+                    # [청크 데이터 전송: 복사 방지를 위해 나누어서 전송]
+                    s.sendall(nonce)
+                    s.sendall(encrypted_chunk)
 
                     sent_size += original_chunk_size
                     utils.log("INFO", "CHUNK", f"청크 {chunk_index} 전송 완료 ({sent_size}/{filesize} 바이트)")

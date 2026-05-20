@@ -5,3 +5,4 @@ __pycache__
 /test_*.txt
 /*.log
 /received_files/
+/.antigravitycli/

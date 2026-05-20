@@ -116,14 +116,16 @@ def recv_exact(sock: socket.socket, length: int) -> bytes:
     소켓 버퍼에서 정확히 지정된 length 바이트만큼의 데이터를 읽어올 때까지 대기하며 수신
     스트림 기반인 TCP 소켓 특성상 데이터가 잘려서 도착할 수 있으므로 이 함수가 필요
     """
-    data = b""
-    while len(data) < length:
-        packet = sock.recv(length - len(data))
-        if not packet:
+    buf = bytearray(length)
+    view = memoryview(buf)
+    pos = 0
+    while pos < length:
+        packet_len = sock.recv_into(view[pos:])
+        if not packet_len:
             # 상대방이 연결을 정상적으로 종료했거나 네트워크가 끊어진 경우 예외 발생
             raise ConnectionError("네트워크 연결이 예기치 않게 종료되었습니다.")
-        data += packet
-    return data
+        pos += packet_len
+    return bytes(buf)
 
 def recv_with_length(sock: socket.socket) -> bytes:
     """
