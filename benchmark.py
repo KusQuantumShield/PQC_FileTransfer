@@ -5,26 +5,30 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import utils
 
 def measure_kem_performance(iterations=1000):
-    print(f"--- KEM Benchmark ({utils.KEM_ALG}, {iterations} iterations) ---")
+    """
+    KEM (Key Encapsulation Mechanism) 성능을 측정합니다.
+    키 생성, 캡슐화, 역캡슐화 속도를 계산합니다.
+    """
+    print(f"--- KEM 성능 측정 ({utils.KEM_ALG}, {iterations}회 반복) ---")
     
-    # 1. Keypair Generation
+    # 1. 키 쌍 생성 (Keypair Generation)
     start = time.perf_counter()
     for _ in range(iterations):
         with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
             public_key = kem.generate_keypair()
     end = time.perf_counter()
-    print(f"Keygen: {(end - start) / iterations * 1000:.4f} ms/op")
+    print(f"키 생성:  {(end - start) / iterations * 1000:.4f} ms/op")
 
-    # 2. Encapsulation
+    # 2. 캡슐화 (Encapsulation) - 공유 비밀키 생성 및 암호화
     with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
         public_key = kem.generate_keypair()
         start = time.perf_counter()
         for _ in range(iterations):
             ciphertext, shared_secret = kem.encap_secret(public_key)
         end = time.perf_counter()
-        print(f"Encap:  {(end - start) / iterations * 1000:.4f} ms/op")
+        print(f"캡슐화:   {(end - start) / iterations * 1000:.4f} ms/op")
 
-    # 3. Decapsulation
+    # 3. 역캡슐화 (Decapsulation) - 암호화된 비밀키 복호화
     with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
         public_key = kem.generate_keypair()
         ciphertext, shared_secret = kem.encap_secret(public_key)
@@ -32,31 +36,35 @@ def measure_kem_performance(iterations=1000):
         for _ in range(iterations):
             decrypted_secret = kem.decap_secret(ciphertext)
         end = time.perf_counter()
-        print(f"Decap:  {(end - start) / iterations * 1000:.4f} ms/op")
+        print(f"역캡슐화: {(end - start) / iterations * 1000:.4f} ms/op")
     print()
 
 def measure_dsa_performance(iterations=1000):
-    print(f"--- DSA Benchmark ({utils.SIG_ALG}, {iterations} iterations) ---")
+    """
+    DSA (Digital Signature Algorithm) 성능을 측정합니다.
+    키 생성, 서명, 검증 속도를 계산합니다.
+    """
+    print(f"--- DSA 성능 측정 ({utils.SIG_ALG}, {iterations}회 반복) ---")
     message = b"This is a test message for signature validation."
     
-    # 1. Keypair Generation
+    # 1. 키 쌍 생성 (Keypair Generation)
     start = time.perf_counter()
     for _ in range(iterations):
         with oqs.Signature(utils.SIG_ALG) as signer:
             public_key = signer.generate_keypair()
     end = time.perf_counter()
-    print(f"Keygen: {(end - start) / iterations * 1000:.4f} ms/op")
+    print(f"키 생성:  {(end - start) / iterations * 1000:.4f} ms/op")
 
-    # 2. Sign
+    # 2. 서명 생성 (Sign)
     with oqs.Signature(utils.SIG_ALG) as signer:
         public_key = signer.generate_keypair()
         start = time.perf_counter()
         for _ in range(iterations):
             signature = signer.sign(message)
         end = time.perf_counter()
-        print(f"Sign:   {(end - start) / iterations * 1000:.4f} ms/op")
+        print(f"서명:     {(end - start) / iterations * 1000:.4f} ms/op")
 
-    # 3. Verify
+    # 3. 서명 검증 (Verify)
     with oqs.Signature(utils.SIG_ALG) as signer:
         public_key = signer.generate_keypair()
         signature = signer.sign(message)
@@ -66,36 +74,40 @@ def measure_dsa_performance(iterations=1000):
         for _ in range(iterations):
             is_valid = verifier.verify(message, signature, public_key)
         end = time.perf_counter()
-        print(f"Verify: {(end - start) / iterations * 1000:.4f} ms/op")
+        print(f"검증:     {(end - start) / iterations * 1000:.4f} ms/op")
     print()
 
 def measure_aes_performance(chunk_size=1024*1024, iterations=100):
-    print(f"--- AES-GCM Benchmark (Chunk size: {chunk_size / 1024 / 1024:.1f} MB, {iterations} iterations) ---")
+    """
+    AES-GCM 대칭키 암호화 성능을 측정합니다.
+    대용량 데이터(청크) 처리 시의 속도와 처리량(Throughput)을 계산합니다.
+    """
+    print(f"--- AES-GCM 성능 측정 (청크 크기: {chunk_size / 1024 / 1024:.1f} MB, {iterations}회 반복) ---")
     key = os.urandom(32)
     aesgcm = AESGCM(key)
     data = os.urandom(chunk_size)
     nonce = os.urandom(12)
     
-    # 1. Encrypt
+    # 1. 암호화 (Encrypt)
     start = time.perf_counter()
     for _ in range(iterations):
         ciphertext = aesgcm.encrypt(nonce, data, None)
     end = time.perf_counter()
     enc_time = (end - start) / iterations
-    print(f"Encrypt: {enc_time * 1000:.4f} ms/op, Throughput: {(chunk_size / enc_time) / (1024*1024):.2f} MB/s")
+    print(f"암호화: {enc_time * 1000:.4f} ms/op, 처리량: {(chunk_size / enc_time) / (1024*1024):.2f} MB/s")
 
-    # 2. Decrypt
+    # 2. 복호화 (Decrypt)
     ciphertext = aesgcm.encrypt(nonce, data, None)
     start = time.perf_counter()
     for _ in range(iterations):
         plaintext = aesgcm.decrypt(nonce, ciphertext, None)
     end = time.perf_counter()
     dec_time = (end - start) / iterations
-    print(f"Decrypt: {dec_time * 1000:.4f} ms/op, Throughput: {(chunk_size / dec_time) / (1024*1024):.2f} MB/s")
+    print(f"복호화: {dec_time * 1000:.4f} ms/op, 처리량: {(chunk_size / dec_time) / (1024*1024):.2f} MB/s")
     print()
 
 if __name__ == "__main__":
-    print("Starting PQC & Symmetric Crypto Benchmarks...\n")
+    print("양자 내성 암호(PQC) 및 대칭키 암호 성능 측정을 시작합니다...\n")
     measure_kem_performance(1000)
     measure_dsa_performance(100)
     measure_aes_performance(utils.CHUNK_SIZE, 100)

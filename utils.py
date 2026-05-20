@@ -65,7 +65,7 @@ if not _logger.handlers:
     _logger.addHandler(_file_handler)
 
 
-def log(level: str, module: str, message: str):
+def log(level: str, module: str, message: str, exc_info: bool = False):
     """
     구조화된 로그를 터미널에 출력하고 로그 파일에 저장
     기존의 print 기반 코드를 수정하지 않고 호환성을 유지하기 위해 래퍼 함수로 사용
@@ -73,10 +73,11 @@ def log(level: str, module: str, message: str):
     :param level: "INFO", "PASS", "ERROR", "FAIL", "RESULT" 등 상태
     :param module: "KEM", "FILE", "SIGN", "CONNECT", "CHUNK" 등 모듈 태그
     :param message: 실제 로그 내용
+    :param exc_info: True일 경우 Exception의 Traceback 정보도 함께 출력 (주로 디버그용)
     """
     # 내부적으로 에러와 일반 정보를 구분하여 파이썬 표준 로거에 전달
     log_level = logging.ERROR if level in ["ERROR", "FAIL"] else logging.INFO
-    _logger.log(log_level, message, extra={"custom_level": level, "module_name": module})
+    _logger.log(log_level, message, extra={"custom_level": level, "module_name": module}, exc_info=exc_info)
 
 
 # =====================================================================

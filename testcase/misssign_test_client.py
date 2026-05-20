@@ -13,11 +13,11 @@ def main():
     file_path = utils.select_file()
 
     if not file_path:
-        utils.log("INFO", "FILE", "File selection cancelled by user")
+        utils.log("INFO", "FILE", "사용자가 파일 선택을 취소했습니다")
         return
 
     if not os.path.exists(file_path):
-        utils.log("ERROR", "FILE", f"File not found: {file_path}")
+        utils.log("ERROR", "FILE", f"파일을 찾을 수 없습니다: {file_path}")
         utils.show_error("파일 오류", f"파일을 찾을 수 없습니다.\n\n{file_path}")
         return
 
@@ -28,34 +28,34 @@ def main():
             # [단계 1] 서버 접속 및 핸드셰이크 (KEM을 이용한 키 교환)
             # =========================================================
             s.connect((utils.SERVER_IP, utils.PORT))
-            utils.log("INFO", "CONNECT", f"Connected to server {utils.SERVER_IP}:{utils.PORT}")
+            utils.log("INFO", "CONNECT", f"서버 {utils.SERVER_IP}:{utils.PORT}에 연결되었습니다")
 
             # 서버가 보낸 양자 내성 공개키(Public Key)를 수신
             pk_len_bytes = utils.recv_exact(s, 4)
             pk_len = struct.unpack("!I", pk_len_bytes)[0]
             
             if pk_len <= 0 or pk_len > 10000:
-                utils.log("FAIL", "KEM", f"Invalid public key length: {pk_len}")
+                utils.log("FAIL", "KEM", f"유효하지 않은 공개키 길이: {pk_len}")
                 raise ValueError("Invalid public key length")
 
             public_key = utils.recv_exact(s, pk_len)
-            utils.log("INFO", "KEM", f"Server public key received ({len(public_key)} bytes)")
+            utils.log("INFO", "KEM", f"서버 공개키를 수신했습니다 ({len(public_key)} 바이트)")
 
             # KEM 알고리즘을 사용하여 서버의 공개키로 공유 비밀키를 캡슐화
             with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
                 kem_ciphertext, shared_secret = kem.encap_secret(public_key)
 
-            utils.log("PASS", "KEM", "Encapsulation completed")
-            utils.log("INFO", "KEY", f"Shared Secret Hash: {utils.hash_ss(shared_secret)}")
+            utils.log("PASS", "KEM", "캡슐화 완료")
+            utils.log("INFO", "KEY", f"공유 비밀키 해시: {utils.hash_ss(shared_secret)}")
 
             # 생성된 KEM 암호문을 서버로 전송
             utils.send_with_length(s, kem_ciphertext)
-            utils.log("INFO", "KEM", f"Ciphertext sent ({len(kem_ciphertext)} bytes)")
+            utils.log("INFO", "KEM", f"암호문 전송 완료 ({len(kem_ciphertext)} 바이트)")
 
             # 교환된 공유 비밀키(shared_secret)를 HKDF를 통해 안전한 32바이트 세션 키로 도출
             session_key = utils.derive_key(shared_secret)
-            utils.log("PASS", "KEY", "Session key derived by HKDF")
-            utils.log("PASS", "KEM", "Handshake complete")
+            utils.log("PASS", "KEY", "HKDF로 세션 키 도출 완료")
+            utils.log("PASS", "KEM", "핸드셰이크 완료")
 
             # =========================================================
             # [단계 2] 전송할 파일의 메타데이터 생성 및 전송
@@ -65,16 +65,16 @@ def main():
             filesize = os.path.getsize(file_path)
             file_hash = utils.sha256_file(file_path)
 
-            utils.log("INFO", "FILE", f"Selected file: {filename}")
-            utils.log("INFO", "FILE", f"File size: {filesize} bytes")
-            utils.log("INFO", "HASH", f"File SHA-256: {file_hash}")
+            utils.log("INFO", "FILE", f"선택된 파일: {filename}")
+            utils.log("INFO", "FILE", f"파일 크기: {filesize} 바이트")
+            utils.log("INFO", "HASH", f"파일 SHA-256: {file_hash}")
 
             # 파일명, 파일 크기, 파일 해시를 차례대로 서버에 전송
             utils.send_with_length(s, filename_bytes)
             s.sendall(struct.pack("!Q", filesize))
             s.sendall(file_hash.encode("utf-8"))
 
-            utils.log("INFO", "FILE", "File metadata sent")
+            utils.log("INFO", "FILE", "파일 메타데이터 전송 완료")
 
             # =========================================================
             # [단계 3] 메타데이터에 대한 전자서명 생성 (데이터 인증)
@@ -85,12 +85,12 @@ def main():
                 sig_public_key = signer.generate_keypair()
                 signature = signer.sign(metadata_for_sign)
 
-            utils.log("PASS", "SIGN", "ML-DSA signature generated")
-            utils.log("INFO", "SIGN", f"Signature public key size: {len(sig_public_key)} bytes")
-            utils.log("INFO", "SIGN", f"Signature size: {len(signature)} bytes")
+            utils.log("PASS", "SIGN", "ML-DSA 서명 생성 완료")
+            utils.log("INFO", "SIGN", f"서명 공개키 크기: {len(sig_public_key)} 바이트")
+            utils.log("INFO", "SIGN", f"서명 크기: {len(signature)} 바이트")
 
             # === 테스트 시나리오: Signature 변조 ===
-            utils.log("WARN", "TEST", "Simulated invalid ML-DSA signature")
+            utils.log("WARN", "TEST", "유효하지 않은 ML-DSA 서명 시뮬레이션")
             signature = bytearray(signature)
             signature[0] = (signature[0] + 1) % 256
             signature = bytes(signature)
@@ -98,11 +98,11 @@ def main():
 
             # 서버가 서명을 검증할 수 있도록 클라이언트가 생성한 서명 검증용 공개키를 전송
             utils.send_with_length(s, sig_public_key)
-            utils.log("INFO", "SIGN", "Signature public key sent")
+            utils.log("INFO", "SIGN", "서명 공개키 전송 완료")
 
             # 생성된 서명 데이터를 전송
             utils.send_with_length(s, signature)
-            utils.log("INFO", "SIGN", "Signature sent")
+            utils.log("INFO", "SIGN", "서명 전송 완료")
 
             # =========================================================
             # [단계 4] 대칭키 암호화(AES-GCM) 기반 대용량 파일 전송
@@ -112,8 +112,8 @@ def main():
             chunk_index = 0
             sent_size = 0
 
-            utils.log("INFO", "CHUNK", f"Chunk size: {utils.CHUNK_SIZE} bytes")
-            utils.log("INFO", "CHUNK", "Chunk transfer started")
+            utils.log("INFO", "CHUNK", f"청크 크기: {utils.CHUNK_SIZE} 바이트")
+            utils.log("INFO", "CHUNK", "청크 전송 시작")
 
             with open(file_path, "rb") as f:
                 while True:
@@ -137,11 +137,11 @@ def main():
                     s.sendall(payload)
 
                     sent_size += original_chunk_size
-                    utils.log("INFO", "CHUNK", f"Sent chunk {chunk_index} ({sent_size}/{filesize} bytes)")
+                    utils.log("INFO", "CHUNK", f"청크 {chunk_index} 전송 완료 ({sent_size}/{filesize} 바이트)")
                     chunk_index += 1
 
-            utils.log("PASS", "CHUNK", "All chunks sent successfully")
-            utils.log("RESULT", "TRANSFER", "File data transfer completed")
+            utils.log("PASS", "CHUNK", "모든 청크 전송 완료")
+            utils.log("RESULT", "TRANSFER", "파일 데이터 전송 완료")
 
             # =========================================================
             # [단계 5] 마무리 및 종료 신호 전송
@@ -149,7 +149,7 @@ def main():
             utils.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{filename}")
 
             utils.send_with_length(s, b"CLIENT_DONE")
-            utils.log("INFO", "TRANSFER", "CLIENT_DONE signal sent")
+            utils.log("INFO", "TRANSFER", "CLIENT_DONE 신호 전송 완료")
 
         except Exception as e:
             utils.log("ERROR", "CLIENT", str(e))
