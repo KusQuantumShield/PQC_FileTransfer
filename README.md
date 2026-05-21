@@ -10,6 +10,7 @@
 - **스트리밍 기반 대용량 전송:** 파일을 청크(Chunk) 단위로 분할하여 전송함으로써 메모리 효율을 극대화하고 대용량 파일 전송을 지원합니다.
 - **실시간 압축 및 무결성 검증:** zlib을 이용한 데이터 압축과 SHA-256 해시를 통한 실시간 파일 무결성 검증 기능을 포함합니다.
 - **공격 시나리오 시뮬레이션:** 해시 변조, 페이로드 변조, 서명 누락 등 다양한 공격 시도에 대해 시스템이 어떻게 대응하는지 확인할 수 있는 실습 스크립트를 제공합니다.
+- **성능 측정 (벤치마크):** KEM, DSA, AES-GCM 성능을 측정하고 CSV 형태로 결과 데이터를 저장할 수 있는 스크립트를 포함하고 있습니다.
 
 ## 🛠 기술 스택 및 알고리즘
 
@@ -28,14 +29,17 @@
 
 ```text
 .
-├── server.py            # PQC 보안 서버 (파일 수신 및 검증)
-├── client.py            # PQC 보안 클라이언트 (파일 암호화 및 송신)
-├── utils.py             # 공통 유틸리티 (로깅, 네트워크, 암호화 함수)
-├── attack_hash.py       # 공격 시나리오: 해시 변조 시뮬레이션
-├── attack_payload.py    # 공격 시나리오: 암호문 페이로드 변조 시뮬레이션
-├── attack_signature.py  # 공격 시나리오: 전자서명 무효화 시뮬레이션
-├── liboqs/              # liboqs C 라이브러리 (빌드 필요)
-└── liboqs-python/       # liboqs Python 래퍼
+├── server.py               # PQC 보안 서버 (파일 수신 및 검증)
+├── client.py               # PQC 보안 클라이언트 (파일 암호화 및 송신)
+├── utils.py                # 공통 유틸리티 (로깅, 네트워크, 암호화 함수)
+├── attack/                 # 공격 시나리오 스크립트 디렉토리
+│   ├── attack_hash.py      # 공격 시나리오: 해시 변조 시뮬레이션
+│   ├── attack_payload.py   # 공격 시나리오: 암호문 페이로드 변조 시뮬레이션
+│   └── attack_signature.py # 공격 시나리오: 전자서명 무효화 시뮬레이션
+├── benchmark.py            # 암호 알고리즘 성능 측정 스크립트
+├── benchmark_perform.py    # 성능 측정 및 CSV 저장 스크립트
+├── liboqs/                 # liboqs C 라이브러리 (빌드 필요)
+└── liboqs-python/          # liboqs Python 래퍼
 ```
 
 ## ⚙️ 설치 및 준비 사항
@@ -75,11 +79,18 @@ python client.py
 
 ### 3. 공격 시나리오 테스트
 
-보안 메커니즘이 정상 작동하는지 확인하기 위해 공격 스크립트를 실행해 볼 수 있습니다.
+보안 메커니즘이 정상 작동하는지 확인하기 위해 `attack` 폴더 내의 공격 스크립트를 실행해 볼 수 있습니다.
 
-- **해시 변조 공격:** `python attack_hash.py`
-- **페이로드 변조 공격:** `python attack_payload.py`
-- **서명 변조 공격:** `python attack_signature.py`
+- **해시 변조 공격:** `python attack/attack_hash.py`
+- **페이로드 변조 공격:** `python attack/attack_payload.py`
+- **서명 변조 공격:** `python attack/attack_signature.py`
+
+### 4. 성능 벤치마크 (Benchmark)
+
+사용된 알고리즘의 동작 속도 및 크기를 분석하고 싶다면 벤치마크 스크립트를 실행합니다.
+
+- **기본 성능 측정 (터미널 출력):** `python benchmark.py`
+- **상세 성능 측정 (CSV 파일 자동 저장 포함):** `python benchmark_perform.py`
 
 ## 📝 로그 및 모니터링
 
