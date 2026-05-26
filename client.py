@@ -29,6 +29,12 @@ def main():
 
     # TCP IPv4 소켓 생성
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        # 빠른 전송을 위해 Nagle 알고리즘 비활성화
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        # 대용량 파일 전송을 위해 송수신 소켓 버퍼 크기 증가 (4MB)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+        
         try:
             # =========================================================
             # [단계 1] 서버 접속 및 핸드셰이크 (KEM을 이용한 키 교환)
@@ -86,10 +92,21 @@ def main():
             # [단계 3] 대칭키 암호화(AES-GCM) 기반 대용량 파일 전송 및 해시 계산
             # =========================================================
             aesgcm = AESGCM(session_key)
-            use_compression = True
+            
+            # 압축 효율이 떨어지는 포맷은 zlib 생략
+            uncompressible_exts = {'.zip', '.rar', '.7z', '.gz', '.mp4', '.avi', '.mkv', '.jpg', '.jpeg', '.png', '.pdf', '.gif', '.webp'}
+            ext = os.path.splitext(filename)[1].lower()
+            use_compression = ext not in uncompressible_exts
+            
+            if not use_compression:
+                utils.log("INFO", "COMPRESS", f"'{ext}' 파일은 이미 압축/암호화되어 있어 Zlib 스트리밍 압축을 생략합니다.")
+                
             chunk_index = 0
             sent_size = 0
             
+            # 2. Zlib 스트리밍 압축을 위한 상태 유지 객체 생성
+            compressor = zlib.compressobj(level=1) if use_compression else None
+
             # 스트리밍 해시 계산을 위한 초기화
             import hashlib
             file_hasher = hashlib.sha256()
@@ -99,33 +116,50 @@ def main():
 
             transfer_start_time = time.perf_counter()
 
+            # AES-GCM Nonce (12바이트)를 매번 생성하지 않고, 
+            # 8바이트의 순차적인 인덱스와 4바이트의 고정 난수를 결합하여 속도를 높임
+            base_nonce_suffix = os.urandom(4)
+
+            # 불필요한 메모리 할당(Copy)을 막기 위해 고정된 bytearray 버퍼에 데이터를 읽어옴 (Zero-copy)
+            buffer = bytearray(utils.CHUNK_SIZE)
             with open(file_path, "rb") as f:
                 while True:
-                    chunk = f.read(utils.CHUNK_SIZE)
-                    if not chunk:
+                    bytes_read = f.readinto(buffer)
+                    if bytes_read == 0:
                         break
+                        
+                    # 파일에서 읽은 크기만큼만 memoryview로 잘라서 참조 (새로운 바이트 객체 생성 방지)
+                    chunk_view = memoryview(buffer)[:bytes_read]
 
-                    original_chunk_size = len(chunk)
+                    original_chunk_size = bytes_read
+                    sent_size += original_chunk_size
+                    is_last_chunk = (sent_size == filesize)
                     
                     # 실시간 해시 업데이트
-                    file_hasher.update(chunk)
+                    file_hasher.update(chunk_view)
                     
                     flags = 0x01 if use_compression else 0x00
 
                     if use_compression:
-                        chunk = zlib.compress(chunk, level=1)
+                        # 2. 스트리밍 압축 적용 (중간 청크는 flush 생략, 마지막 청크에서만 Z_FINISH 사용)
+                        chunk_data = compressor.compress(chunk_view)
+                        if is_last_chunk:
+                            chunk_data += compressor.flush(zlib.Z_FINISH)
+                    else:
+                        chunk_data = chunk_view
 
-                    nonce = os.urandom(12)
-                    encrypted_chunk = aesgcm.encrypt(nonce, chunk, None)
+                    nonce = struct.pack("!Q", chunk_index) + base_nonce_suffix
+                    encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, None)
                     payload_len = len(nonce) + len(encrypted_chunk)
 
                     # [청크 헤더 구조: 총 13바이트]
-                    s.sendall(struct.pack("!BQI", flags, chunk_index, payload_len))
-                    # [청크 데이터 전송: 복사 방지를 위해 나누어서 전송]
-                    s.sendall(nonce)
+                    header = struct.pack("!BQI", flags, chunk_index, payload_len)
+                    
+                    # 메모리 복사 방지를 위해 헤더+Nonce와 대용량 암호문을 분리하여 전송
+                    # TCP_NODELAY가 활성화되어 있으므로 분리 전송해도 지연 없이 빠르게 전송됨
+                    s.sendall(header + nonce)
                     s.sendall(encrypted_chunk)
 
-                    sent_size += original_chunk_size
                     utils.log("INFO", "CHUNK", f"청크 {chunk_index} 전송 완료 ({sent_size}/{filesize} 바이트)")
                     chunk_index += 1
 
@@ -142,8 +176,8 @@ def main():
             # 계산된 최종 파일 해시 전송
             s.sendall(file_hash.encode("utf-8"))
             
-            # 무결성 검증을 위한 서명 데이터 조합
-            metadata_for_sign = (filename + str(filesize) + file_hash).encode("utf-8")
+            # 무결성 검증을 위한 서명 데이터 조합 (Canonicalization 취약점 방지를 위해 구분자 사용)
+            metadata_for_sign = f"{filename}|{filesize}|{file_hash}".encode("utf-8")
 
             sign_start_time = time.perf_counter()
             with oqs.Signature(utils.SIG_ALG) as signer:

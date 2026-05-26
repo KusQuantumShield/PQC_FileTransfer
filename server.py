@@ -94,6 +94,14 @@ def handle_client(conn: socket.socket, addr) -> bool:
         aesgcm = AESGCM(session_key)
         # 스트리밍 방식으로 수신된 데이터의 해시를 실시간 계산하기 위한 객체 초기화
         file_hasher = hashlib.sha256()
+        
+        # 2. Zlib 스트리밍 압축 해제를 위한 상태 유지 객체 생성
+        decompressor = zlib.decompressobj()
+
+        # 매 청크마다 1MB를 할당하지 않기 위해 수신 버퍼 사전 할당 (Zero-copy)
+        MAX_PAYLOAD_SIZE = utils.CHUNK_SIZE + 1024 * 10
+        recv_buffer = bytearray(MAX_PAYLOAD_SIZE)
+        recv_view = memoryview(recv_buffer)
 
         received_size = 0         # 현재까지 온전하게 복호화되어 기록된 바이트 수
         expected_chunk_index = 0  # 예상되는 다음 청크의 번호 (순서가 뒤바뀌는지 검증)
@@ -114,17 +122,16 @@ def handle_client(conn: socket.socket, addr) -> bool:
                 )
                 raise ValueError(f"Chunk index mismatch (expected={expected_chunk_index}, got={chunk_index})")
 
-            if payload_len <= 0:
+            if payload_len <= 0 or payload_len > MAX_PAYLOAD_SIZE:
                 utils.log("ERROR", "CHUNK", "유효하지 않은 페이로드 길이")
-                raise ValueError("Invalid payload length")
+                raise ValueError(f"Invalid payload length: {payload_len}")
 
-            # 2. 파악된 페이로드 길이만큼 데이터(Nonce + 암호문) 수신
-            payload = utils.recv_exact(conn, payload_len)
+            # 2. 미리 할당된 버퍼에 파악된 페이로드 길이만큼 데이터(Nonce + 암호문) 수신 (Zero-copy)
+            utils.recv_exact_into(conn, recv_view, payload_len)
 
-            # 페이로드 분리 (memoryview를 사용하여 대용량 암호문의 메모리 복사 제거)
-            payload_view = memoryview(payload)
-            nonce = bytes(payload_view[:12])
-            encrypted_chunk = payload_view[12:]
+            # 페이로드 분리
+            nonce = bytes(recv_view[:12])
+            encrypted_chunk = recv_view[12:payload_len]
 
             # 3. AES-GCM을 사용하여 청크 데이터 복호화 
             try:
@@ -136,7 +143,8 @@ def handle_client(conn: socket.socket, addr) -> bool:
             # 4. 클라이언트가 압축을 적용(flags 0x01)한 경우 zlib로 다시 압축을 품
             if flags & 0x01:
                 try:
-                    decrypted_chunk = zlib.decompress(decrypted_chunk)
+                    # 2. 스트리밍 압축 해제 적용
+                    decrypted_chunk = decompressor.decompress(decrypted_chunk)
                 except Exception as e:
                     utils.log("ERROR", "CHUNK", f"인덱스 {chunk_index}에서 청크 압축 해제 실패: {e}", exc_info=True)
                     return False
@@ -193,8 +201,8 @@ def handle_client(conn: socket.socket, addr) -> bool:
         utils.log("PASS", "HASH", "파일 해시 검증 성공")
         utils.log("INFO", "HASH", f"계산된 SHA-256: {received_hash}")
 
-        # 5-3. 클라이언트 서명 검증
-        metadata_for_verify = (filename + str(original_filesize) + received_hash).encode("utf-8")
+        # 5-3. 클라이언트 서명 검증 (Canonicalization 방지용 구분자 사용)
+        metadata_for_verify = f"{filename}|{original_filesize}|{received_hash}".encode("utf-8")
 
         try:
             sign_verify_start_time = time.perf_counter()
@@ -227,8 +235,14 @@ def handle_client(conn: socket.socket, addr) -> bool:
 
         utils.log("INFO", "TRANSFER", "CLIENT_DONE 신호 수신 완료")
 
-        # 최종 저장 경로 조합 후 임시 파일 이동
+        # 최종 저장 경로 조합 후 임시 파일 이동 (중복 파일 덮어쓰기 방지)
+        base_name, ext = os.path.splitext(filename)
         save_path = os.path.join(SAVE_DIR, filename)
+        counter = 1
+        while os.path.exists(save_path):
+            save_path = os.path.join(SAVE_DIR, f"{base_name}({counter}){ext}")
+            counter += 1
+            
         shutil.move(temp_path, save_path)
         temp_path = None # 성공적으로 이동했으므로 temp_path 해제
 
@@ -260,6 +274,8 @@ def main():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         # 개발 및 빈번한 재시작 중 "Address already in use" 에러를 방지하기 위해 주소/포트 즉시 재사용 옵션 적용
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
         s.bind((utils.HOST, utils.PORT))
         s.listen(1) # 한 번에 1개의 클라이언트 접속만 대기 큐에 허용
         
@@ -270,6 +286,11 @@ def main():
         while True:
             utils.log("INFO", "CONNECT", "연결 대기 중")
             conn, addr = s.accept() # 클라이언트가 접속할 때까지 블로킹 상태로 대기
+            
+            # 빠른 전송을 위해 Nagle 알고리즘 비활성화 및 네트워크 버퍼 증가
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
             
             # 접속한 클라이언트를 처리하는 메인 핸들러 호출
             if handle_client(conn, addr):

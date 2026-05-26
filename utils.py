@@ -111,6 +111,18 @@ def derive_key(shared_secret: bytes) -> bytes:
 # TCP 소켓은 데이터가 한 번에 모두 전송되거나 수신된다고 보장하지 않으므로
 # 정확한 길이만큼 데이터를 반복해서 읽어오는 로직이 필수적임
 
+def recv_exact_into(sock: socket.socket, view: memoryview, length: int) -> None:
+    """
+    미리 할당된 memoryview 버퍼에 지정된 length 바이트만큼 데이터를 수신하여 저장
+    새로운 메모리 객체를 생성하지 않으므로(Zero-copy) 대용량 수신 시 메모리 효율이 매우 높음
+    """
+    pos = 0
+    while pos < length:
+        packet_len = sock.recv_into(view[pos:length])
+        if not packet_len:
+            raise ConnectionError("네트워크 연결이 예기치 않게 종료되었습니다.")
+        pos += packet_len
+
 def recv_exact(sock: socket.socket, length: int) -> bytes:
     """
     소켓 버퍼에서 정확히 지정된 length 바이트만큼의 데이터를 읽어올 때까지 대기하며 수신
@@ -125,7 +137,8 @@ def recv_exact(sock: socket.socket, length: int) -> bytes:
             # 상대방이 연결을 정상적으로 종료했거나 네트워크가 끊어진 경우 예외 발생
             raise ConnectionError("네트워크 연결이 예기치 않게 종료되었습니다.")
         pos += packet_len
-    return bytes(buf)
+    # 1. 불필요한 메모리 복사 제거 (bytearray를 그대로 반환하여 1MB 복사 방지)
+    return buf
 
 def recv_with_length(sock: socket.socket) -> bytes:
     """
@@ -150,10 +163,8 @@ def send_with_length(sock: socket.socket, data: bytes) -> None:
     가변 길이의 데이터를 전송하기 위한 래퍼 함수
     데이터 본문을 보내기 직전에, 해당 데이터의 길이(바이트 수)를 4바이트 헤더로 먼저 전송
     """
-    # 1. 전송할 데이터의 길이를 4바이트 네트워크 바이트 순서의 바이너리로 패킹하여 전송
-    sock.sendall(struct.pack("!I", len(data)))
-    # 2. 실제 데이터 전송
-    sock.sendall(data)
+    # 1. 전송할 데이터의 길이(4바이트 헤더)와 실제 데이터를 합쳐 한 번의 시스템 콜로 전송
+    sock.sendall(struct.pack("!I", len(data)) + data)
 
 # =====================================================================
 # UI 및 파일 입출력 유틸리티 (UI Utilities)
