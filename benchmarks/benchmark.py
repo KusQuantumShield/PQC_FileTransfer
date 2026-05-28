@@ -2,7 +2,9 @@ import time
 import os
 import oqs
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import utils
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+from pqc_transfer import utils
 
 def measure_kem_performance(iterations=1000):
     """
@@ -12,11 +14,11 @@ def measure_kem_performance(iterations=1000):
     print(f"--- KEM 성능 측정 ({utils.KEM_ALG}, {iterations}회 반복) ---")
     
     # 1. 키 쌍 생성 (Keypair Generation)
-    start = time.perf_counter()
-    for _ in range(iterations):
-        with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
+    with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
+        start = time.perf_counter()
+        for _ in range(iterations):
             public_key = kem.generate_keypair()
-    end = time.perf_counter()
+        end = time.perf_counter()
     print(f"키 생성:  {(end - start) / iterations * 1000:.4f} ms/op")
 
     # 2. 캡슐화 (Encapsulation) - 공유 비밀키 생성 및 암호화
@@ -48,11 +50,11 @@ def measure_dsa_performance(iterations=1000):
     message = b"This is a test message for signature validation."
     
     # 1. 키 쌍 생성 (Keypair Generation)
-    start = time.perf_counter()
-    for _ in range(iterations):
-        with oqs.Signature(utils.SIG_ALG) as signer:
+    with oqs.Signature(utils.SIG_ALG) as signer:
+        start = time.perf_counter()
+        for _ in range(iterations):
             public_key = signer.generate_keypair()
-    end = time.perf_counter()
+        end = time.perf_counter()
     print(f"키 생성:  {(end - start) / iterations * 1000:.4f} ms/op")
 
     # 2. 서명 생성 (Sign)

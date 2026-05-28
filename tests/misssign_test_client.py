@@ -7,7 +7,9 @@ import time
 import oqs
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-import utils
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+from pqc_transfer import utils
 
 def main():
     utils.log("INFO", "SYSTEM", "--- PQC 파일 전송 클라이언트 초기화 ---")
@@ -15,8 +17,11 @@ def main():
     utils.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {utils.SIG_ALG}")
     utils.log("INFO", "SYSTEM", f"청크(Chunk) 크기: {utils.CHUNK_SIZE} 바이트")
 
-    # 1. 사용자에게 전송할 파일을 선택받음
-    file_path = utils.select_file()
+    import sys
+    if len(sys.argv) > 1:
+        file_path = sys.argv[1]
+    else:
+        file_path = utils.select_file()
 
     if not file_path:
         utils.log("INFO", "FILE", "사용자가 파일 선택을 취소했습니다")
@@ -126,39 +131,54 @@ def main():
                 while True:
                     bytes_read = f.readinto(buffer)
                     if bytes_read == 0:
+                        # 3. 파일 끝에 도달 -> Z_FINISH 처리 및 명시적 EOF(0x02) 플래그를 담은 마지막 빈 청크 전송
+                        flags = 0x03 if use_compression else 0x02 # 0x01 (압축) | 0x02 (EOF)
+                        chunk_data = compressor.flush(zlib.Z_FINISH) if use_compression else b""
+                        
+                        nonce = struct.pack("!Q", chunk_index) + base_nonce_suffix
+                        temp_payload_len = len(nonce) + len(chunk_data) + 16
+                        header = struct.pack("!BQI", flags, chunk_index, temp_payload_len)
+                        
+                        # 취약점 패치: 평문 헤더(header)를 AEAD의 인증 데이터(AAD)로 결합하여 헤더 변조를 즉시 차단
+                        encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
+                        # 페이로드 길이를 다시 계산 (암호문 길이에만 영향을 미치므로)
+                        payload_len = len(nonce) + len(encrypted_chunk)
+                        
+                        # 헤더를 최종 길이로 다시 패킹
+                        header = struct.pack("!BQI", flags, chunk_index, payload_len)
+                        
+                        s.sendall(header + nonce)
+                        s.sendall(encrypted_chunk)
                         break
                         
-                    # 파일에서 읽은 크기만큼만 memoryview로 잘라서 참조 (새로운 바이트 객체 생성 방지)
+                    # 파일에서 읽은 크기만큼만 memoryview로 잘라서 참조
                     chunk_view = memoryview(buffer)[:bytes_read]
-
-                    original_chunk_size = bytes_read
-                    sent_size += original_chunk_size
-                    is_last_chunk = (sent_size == filesize)
                     
                     # 실시간 해시 업데이트
                     file_hasher.update(chunk_view)
                     
+                    # 일반 데이터 청크 전송 (압축 포함, Z_FINISH 생략)
                     flags = 0x01 if use_compression else 0x00
-
-                    if use_compression:
-                        # 2. 스트리밍 압축 적용 (중간 청크는 flush 생략, 마지막 청크에서만 Z_FINISH 사용)
-                        chunk_data = compressor.compress(chunk_view)
-                        if is_last_chunk:
-                            chunk_data += compressor.flush(zlib.Z_FINISH)
-                    else:
-                        chunk_data = chunk_view
+                    chunk_data = compressor.compress(chunk_view) if use_compression else chunk_view
 
                     nonce = struct.pack("!Q", chunk_index) + base_nonce_suffix
-                    encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, None)
+                    # [청크 헤더 구조: 총 13바이트]
+                    # 취약점 패치: 헤더를 인증 데이터(AAD)로 사용하기 위해 임시 길이로 먼저 패킹
+                    temp_payload_len = len(nonce) + len(chunk_data) + 16 # tag(16)
+                    header = struct.pack("!BQI", flags, chunk_index, temp_payload_len)
+                    
+                    encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
                     payload_len = len(nonce) + len(encrypted_chunk)
 
-                    # [청크 헤더 구조: 총 13바이트]
+                    # 실제 payload_len으로 헤더 최종 확정
                     header = struct.pack("!BQI", flags, chunk_index, payload_len)
                     
                     # 메모리 복사 방지를 위해 헤더+Nonce와 대용량 암호문을 분리하여 전송
                     # TCP_NODELAY가 활성화되어 있으므로 분리 전송해도 지연 없이 빠르게 전송됨
                     s.sendall(header + nonce)
                     s.sendall(encrypted_chunk)
+                    
+                    sent_size += bytes_read
 
                     utils.log("INFO", "CHUNK", f"청크 {chunk_index} 전송 완료 ({sent_size}/{filesize} 바이트)")
                     chunk_index += 1
@@ -177,7 +197,7 @@ def main():
             s.sendall(file_hash.encode("utf-8"))
             
             # 무결성 검증을 위한 서명 데이터 조합 (Canonicalization 취약점 방지를 위해 구분자 사용)
-            metadata_for_sign = f"{filename}|{filesize}|{file_hash}".encode("utf-8")
+            metadata_for_sign = f"{filename}|{sent_size}|{file_hash}".encode("utf-8")
 
             sign_start_time = time.perf_counter()
             with oqs.Signature(utils.SIG_ALG) as signer:
@@ -188,6 +208,13 @@ def main():
             utils.log("PASS", "SIGN", f"ML-DSA 서명 생성 완료 (소요 시간: {sign_end_time - sign_start_time:.4f} 초)")
             utils.log("INFO", "SIGN", f"서명 공개키 크기: {len(sig_public_key)} 바이트")
             utils.log("INFO", "SIGN", f"서명 크기: {len(signature)} 바이트")
+
+            # === 테스트 시나리오: Signature 변조 ===
+            utils.log("WARN", "TEST", "유효하지 않은 ML-DSA 서명 시뮬레이션")
+            signature = bytearray(signature)
+            signature[0] = (signature[0] + 1) % 256
+            signature = bytes(signature)
+            # ======================================
 
             # 서버가 서명을 검증할 수 있도록 클라이언트가 생성한 서명 검증용 공개키를 전송
             utils.send_with_length(s, sig_public_key)
