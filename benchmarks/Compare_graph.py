@@ -5,10 +5,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 
-PQC_CSV = "Benchmark Results.csv"
-RSA_CSV = "benchmark_RSA.csv"
+BASE_DIR = Path(__file__).resolve().parent
+PQC_CSV = BASE_DIR / "Benchmark Results.csv"
+RSA_CSV = BASE_DIR / "benchmark_RSA.csv"
 
-OUTPUT_DIR = Path("comparison_graphs")
+OUTPUT_DIR = BASE_DIR / "comparison_graphs"
 
 
 def read_csv_rows(filename):
@@ -57,7 +58,7 @@ def get_value_bytes(rows, category, operation):
     return None
 
 
-def save_bar_graph(title, labels, values, ylabel, output_path):
+def save_bar_graph(title, labels, values, ylabel, output_path, log_scale=False):
     """
     막대 그래프를 생성하고 이미지 파일로 저장합니다.
     - Matplotlib 라이브러리를 활용하며 x축 라벨(항목명)이 겹치지 않도록 회전시켜 배치합니다.
@@ -66,6 +67,10 @@ def save_bar_graph(title, labels, values, ylabel, output_path):
     plt.bar(labels, values)
     plt.title(title)
     plt.ylabel(ylabel)
+    
+    if log_scale:
+        plt.yscale('log')
+        
     plt.xticks(rotation=20, ha="right")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
@@ -89,7 +94,8 @@ def create_key_exchange_time_graph(pqc_rows, rsa_rows):
     if None in [pqc_keygen, pqc_encap, pqc_decap, pqc_hkdf, rsa_total]:
         raise ValueError("키 교환 시간 비교에 필요한 값이 CSV에서 누락되었습니다.")
 
-    pqc_total = pqc_keygen + pqc_encap + pqc_decap + pqc_hkdf
+    # PQC 키 교환 전체 소요 시간 (서버/클라이언트 모두 HKDF 수행하므로 2번 합산)
+    pqc_total = pqc_keygen + pqc_encap + pqc_decap + (pqc_hkdf * 2)
 
     labels = [
         "PQC(ML-KEM)",
@@ -105,8 +111,9 @@ def create_key_exchange_time_graph(pqc_rows, rsa_rows):
         title="PQC vs RSA Key Exchange Time",
         labels=labels,
         values=values,
-        ylabel="Average Time (ms)",
-        output_path=OUTPUT_DIR / "pqc_vs_rsa_key_exchange_time.png"
+        ylabel="Average Time (ms) - Log Scale",
+        output_path=OUTPUT_DIR / "pqc_vs_rsa_key_exchange_time.png",
+        log_scale=True
     )
 
     print()
@@ -149,8 +156,9 @@ def create_key_exchange_detail_graph(pqc_rows, rsa_rows):
         title="PQC vs RSA Operation Time Detail",
         labels=labels,
         values=values,
-        ylabel="Average Time (ms)",
-        output_path=OUTPUT_DIR / "pqc_vs_rsa_operation_detail.png"
+        ylabel="Average Time (ms) - Log Scale",
+        output_path=OUTPUT_DIR / "pqc_vs_rsa_operation_detail.png",
+        log_scale=True
     )
 
 

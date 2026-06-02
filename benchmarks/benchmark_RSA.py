@@ -6,7 +6,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 
 
-CSV_FILENAME = "benchmark_RSA.csv"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_FILENAME = os.path.join(BASE_DIR, "benchmark_RSA.csv")
 ITERATIONS = 100
 
 RSA_KEY_SIZE = 2048
@@ -229,8 +230,9 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
     if session_key != decrypted_session_key:
         raise RuntimeError("RSA session key mismatch")
 
-    # 전체 키 교환 파이프라인 수행 시간(키 쌍 생성 + 세션 키 생성 + 암호화 + 복호화) 합산
-    total_ms = keygen_ms + session_key_gen_ms + encrypt_ms + decrypt_ms
+    # RSA는 통상적으로 장기 키(Long-term key)를 사용하므로, 매 연결마다 키를 생성하지 않습니다.
+    # 따라서 실제 키 교환(Key Exchange) 소요 시간은 (세션 키 생성 + 암호화 + 복호화)로 한정하는 것이 PQC(Ephemeral KEM)와 공정한 비교가 됩니다.
+    total_ms = session_key_gen_ms + encrypt_ms + decrypt_ms
     print(f"RSA 전체 키 교환 시간: {total_ms:.4f} ms/op")
 
     add_result(

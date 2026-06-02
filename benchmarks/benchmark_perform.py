@@ -8,7 +8,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../s
 from pqc_transfer import utils
 
 
-CSV_FILENAME = "Benchmark Results.csv"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_FILENAME = os.path.join(BASE_DIR, "Benchmark Results.csv")
 
 
 def save_results_to_csv(results, filename=CSV_FILENAME):
