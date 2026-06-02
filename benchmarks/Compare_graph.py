@@ -14,6 +14,7 @@ OUTPUT_DIR = Path("comparison_graphs")
 def read_csv_rows(filename):
     """
     CSV 파일을 읽어 dict 리스트로 반환합니다.
+    - 성능 데이터 분석 및 그래프 생성을 위한 데이터 전처리 단계입니다.
     """
     rows = []
 
@@ -29,6 +30,7 @@ def read_csv_rows(filename):
 def get_avg_time(rows, category, operation):
     """
     category와 operation이 일치하는 avg_time_ms 값을 찾습니다.
+    - 알고리즘 성능 비교를 위해 실수형(float) 형태의 소요 시간(ms) 데이터를 추출합니다.
     """
     for row in rows:
         if row.get("category") == category and row.get("operation") == operation:
@@ -43,6 +45,7 @@ def get_avg_time(rows, category, operation):
 def get_value_bytes(rows, category, operation):
     """
     category와 operation이 일치하는 value_bytes 값을 찾습니다.
+    - 네트워크 오버헤드 비교를 위해 정수형(int) 형태의 데이터 크기(Bytes)를 추출합니다.
     """
     for row in rows:
         if row.get("category") == category and row.get("operation") == operation:
@@ -57,6 +60,7 @@ def get_value_bytes(rows, category, operation):
 def save_bar_graph(title, labels, values, ylabel, output_path):
     """
     막대 그래프를 생성하고 이미지 파일로 저장합니다.
+    - Matplotlib 라이브러리를 활용하며 x축 라벨(항목명)이 겹치지 않도록 회전시켜 배치합니다.
     """
     plt.figure(figsize=(9, 5))
     plt.bar(labels, values)
@@ -73,6 +77,7 @@ def save_bar_graph(title, labels, values, ylabel, output_path):
 def create_key_exchange_time_graph(pqc_rows, rsa_rows):
     """
     PQC와 RSA의 전체 키 교환 시간을 비교하는 그래프를 생성합니다.
+    - PQC(ML-KEM)의 키 교환 시간은 키 쌍 생성, 캡슐화, 역캡슐화, HKDF 등 각 세부 연산 시간을 모두 합산합니다.
     """
     pqc_keygen = get_avg_time(pqc_rows, "KEM", "key_generation")
     pqc_encap = get_avg_time(pqc_rows, "KEM", "encapsulation")
@@ -113,6 +118,7 @@ def create_key_exchange_time_graph(pqc_rows, rsa_rows):
 def create_key_exchange_detail_graph(pqc_rows, rsa_rows):
     """
     PQC와 RSA의 세부 키 교환 연산 시간을 비교하는 그래프를 생성합니다.
+    - 각 암호 방식에서 어떤 세부 연산(예: RSA 복호화 vs PQC 역캡슐화)이 병목을 일으키는지 상세히 파악할 수 있도록 시각화합니다.
     """
     labels = [
         "PQC KeyGen",
@@ -151,6 +157,7 @@ def create_key_exchange_detail_graph(pqc_rows, rsa_rows):
 def create_size_comparison_graph(pqc_rows, rsa_rows):
     """
     PQC와 RSA의 키 및 암호문 크기를 비교하는 그래프를 생성합니다.
+    - 기존 암호 체계에 비해 PQC가 갖는 네트워크 대역폭(Bandwidth) 부담을 직관적으로 보여주기 위해 작성합니다.
     """
     labels = [
         "ML-KEM Public Key",
@@ -189,6 +196,10 @@ def create_size_comparison_graph(pqc_rows, rsa_rows):
 
 
 def main():
+    """
+    비교 그래프 생성 스크립트의 진입점(Entry Point)입니다.
+    PQC와 RSA의 벤치마크 결과 CSV 파일을 로드하여 비교용 막대 그래프를 생성하고 지정된 폴더에 저장합니다.
+    """
     if not os.path.exists(PQC_CSV):
         raise FileNotFoundError(f"PQC CSV 파일을 찾을 수 없습니다: {PQC_CSV}")
 

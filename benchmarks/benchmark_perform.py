@@ -48,6 +48,8 @@ def add_result(
 ):
     """
     측정 결과를 results 리스트에 추가합니다.
+    - 각 측정 단계의 세부 결과(카테고리, 알고리즘, 동작 종류, 소요 시간, 처리량, 바이트 크기 등)를 모아
+      최종적으로 CSV 파일로 출력하기 위한 헬퍼(helper) 함수입니다.
     """
     results.append({
         "category": category,
@@ -414,13 +416,22 @@ def measure_key_signature_sizes(results):
 
 
 if __name__ == "__main__":
+    # 전체 양자 내성 암호 및 대칭키 암호 체계 성능 벤치마크 진입점
     print("양자 내성 암호(PQC) 및 대칭키 암호 성능 측정을 시작합니다...\n")
 
     results = []
 
+    # 1. KEM (Key Encapsulation Mechanism) 성능 측정 (1000회 반복)
     measure_kem_performance(results, 1000)
+    
+    # 2. DSA (Digital Signature Algorithm) 성능 측정 (100회 반복)
     measure_dsa_performance(results, 100)
+    
+    # 3. 대용량 데이터를 처리하는 AES-GCM 대칭키 성능 측정 (기본 CHUNK 크기로 100회 반복)
     measure_aes_performance(results, utils.CHUNK_SIZE, 100)
+    
+    # 4. KEM, DSA 등 각 알고리즘이 소비하는 바이트(Bytes) 크기 분석
     measure_key_signature_sizes(results)
 
+    # 수집된 모든 결과를 CSV로 저장
     save_results_to_csv(results)

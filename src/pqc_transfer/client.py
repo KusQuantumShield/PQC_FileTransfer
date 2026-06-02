@@ -107,8 +107,11 @@ class PQCClient:
         utils.log("INFO", "FILE", f"선택된 파일: {self.filename}")
         utils.log("INFO", "FILE", f"파일 크기: {self.filesize} 바이트")
 
+        # 파일명을 UTF-8로 인코딩하여 전송합니다.
         filename_bytes = self.filename.encode("utf-8")
         utils.send_with_length(self.socket, filename_bytes)
+        
+        # 파일 크기(8바이트 부호 없는 정수)를 패킹하여 서버로 전송합니다.
         self.socket.sendall(struct.pack("!Q", self.filesize))
 
         utils.log("INFO", "FILE", "초기 파일 메타데이터 전송 완료")
@@ -248,12 +251,22 @@ class PQCClient:
         utils.log("INFO", "SIGN", "서명 전송 완료")
 
     def finalize_transfer(self):
+        """
+        [단계 6] 전송 완료 및 종료 처리
+        
+        서버에게 전송이 모두 완료되었음을 알리는 'CLIENT_DONE' 신호를 전송하고,
+        사용자에게 파일 전송 완료 안내 메시지를 표시합니다.
+        """
         utils.send_with_length(self.socket, b"CLIENT_DONE")
         utils.log("INFO", "TRANSFER", "CLIENT_DONE 신호 전송 완료")
         utils.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{self.filename}")
 
 
 def main():
+    """
+    클라이언트 프로그램의 진입점(Entry Point)입니다.
+    초기 설정을 로깅하고, 사용자로부터 전송할 파일을 선택받아 PQCClient 인스턴스를 실행합니다.
+    """
     utils.log("INFO", "SYSTEM", "--- PQC 파일 전송 클라이언트 초기화 ---")
     utils.log("INFO", "SYSTEM", f"설정된 KEM 알고리즘: {utils.KEM_ALG}")
     utils.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {utils.SIG_ALG}")

@@ -289,7 +289,10 @@ class PQCServerHandler:
         return True
 
     def cleanup(self):
-        """소켓 자원 및 임시 파일 정리"""
+        """
+        소켓 자원 및 임시 파일을 안전하게 정리합니다.
+        전송 중 오류가 발생했거나, 연결이 종료된 경우 남아있는 시스템 자원(파일, 네트워크 연결 등)을 해제합니다.
+        """
         self.conn.close()
         utils.log("INFO", "CONNECT", "연결이 종료되었습니다")
         
@@ -308,6 +311,11 @@ class PQCServerHandler:
 
 
 def main():
+    """
+    서버 프로그램의 진입점(Entry Point)입니다.
+    소켓을 열어 포트를 바인딩하고 클라이언트의 연결을 대기합니다.
+    연결이 수립되면 독립적인 핸들러(PQCServerHandler)를 통해 클라이언트와의 통신을 관리합니다.
+    """
     utils.log("INFO", "SYSTEM", "--- PQC 파일 전송 서버 초기화 ---")
     utils.log("INFO", "SYSTEM", f"설정된 KEM 알고리즘: {utils.KEM_ALG}")
     utils.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {utils.SIG_ALG}")

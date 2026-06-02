@@ -112,7 +112,14 @@ def measure_aes_performance(chunk_size=1024*1024, iterations=100):
     print()
 
 if __name__ == "__main__":
+    # 벤치마크 프로그램 진입점 (단순 콘솔 출력 버전)
     print("양자 내성 암호(PQC) 및 대칭키 암호 성능 측정을 시작합니다...\n")
+    
+    # 1. KEM (Key Encapsulation Mechanism) - 키 쌍 생성, 캡슐화, 역캡슐화 성능 측정
     measure_kem_performance(1000)
+    
+    # 2. DSA (Digital Signature Algorithm) - 키 쌍 생성, 서명, 검증 성능 측정
     measure_dsa_performance(100)
+    
+    # 3. AES-GCM 대용량 청크 단위 암/복호화 성능 및 처리량 측정
     measure_aes_performance(utils.CHUNK_SIZE, 100)
