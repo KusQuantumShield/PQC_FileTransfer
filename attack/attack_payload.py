@@ -95,13 +95,7 @@ def run_attack_client(file_path: str):
                     file_hasher.update(chunk_view)
                     
                     chunk_data = chunk_view
-                    
-                    # --- 공격 핵심 로직 시작 ---
-                    # 첫 번째 청크 데이터 전송 시, 첫 6바이트를 'HACKED' 문자로 변조
-                    if chunk_index == 0:
-                        print("[ATTACK] 파일의 첫 번째 청크 평문 앞부분을 'HACKED'로 변조합니다!")
-                        chunk_data = b"HACKED" + bytes(chunk_view)[6:]
-                    # --- 공격 핵심 로직 끝 ---
+                    chunk_data = chunk_view
                     
                     # 데이터 압축
                     if use_compression:
@@ -115,6 +109,16 @@ def run_attack_client(file_path: str):
                     
                     # AES-GCM으로 데이터 암호화
                     encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
+                    
+                    # --- 공격 핵심 로직 시작 ---
+                    # 첫 번째 청크 데이터 전송 시, 암호문(Payload) 일부를 변조하여 AES-GCM 무결성 훼손
+                    if chunk_index == 0:
+                        print("[ATTACK] 파일의 첫 번째 청크 암호문 앞부분을 변조합니다! (AES-GCM 무결성 검증 시뮬레이션)")
+                        encrypted_chunk_mut = bytearray(encrypted_chunk)
+                        encrypted_chunk_mut[0] ^= 0xFF
+                        encrypted_chunk = bytes(encrypted_chunk_mut)
+                    # --- 공격 핵심 로직 끝 ---
+                    
                     payload_len = len(nonce) + len(encrypted_chunk)
 
                     header = struct.pack("!BQI", flags, chunk_index, payload_len)
@@ -133,15 +137,42 @@ def run_attack_client(file_path: str):
             metadata_for_sign = f"{filename}|{sent_size}|{sent_hash}".encode("utf-8")
             
             # PQC 전자서명(ML-DSA 등) 생성
-            with oqs.Signature(utils.SIG_ALG) as signer:
-                sig_public_key = signer.generate_keypair()
-                signature = signer.sign(metadata_for_sign)
+            sig_sec_file = "client_sig_sec.bin"
+            sig_pub_file = "client_sig_pub.bin"
+            if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
+                with open(sig_sec_file, "rb") as f:
+                    secret_key = f.read()
+                with open(sig_pub_file, "rb") as f:
+                    sig_public_key = f.read()
+                with oqs.Signature(utils.SIG_ALG, secret_key=secret_key) as signer:
+                    signature = signer.sign(metadata_for_sign)
+            else:
+                with oqs.Signature(utils.SIG_ALG) as signer:
+                    sig_public_key = signer.generate_keypair()
+                    signature = signer.sign(metadata_for_sign)
+                    secret_key = signer.export_secret_key()
+                with open(sig_sec_file, "wb") as f:
+                    f.write(secret_key)
+                with open(sig_pub_file, "wb") as f:
+                    f.write(sig_public_key)
 
             # 8. 서명 공개키와 서명 전송
             utils.send_with_length(s, sig_public_key)
             utils.send_with_length(s, signature)
 
             utils.send_with_length(s, b"CLIENT_DONE")
+            
+            # 서버 응답 대기
+            try:
+                s.settimeout(1.0)
+                response = utils.recv_with_length(s).decode("utf-8")
+                if response.startswith("ERROR:"):
+                    print(f"[ATTACK] 서버가 공격을 정상적으로 차단했습니다: {response[6:]}")
+                else:
+                    print(f"[ATTACK] 서버 응답: {response}")
+            except Exception as e:
+                print(f"[ATTACK] 서버가 연결을 종료했습니다 (정상 방어).")
+                
             print("[ATTACK] 공격 시나리오 전송 완료")
             
         except Exception as e:

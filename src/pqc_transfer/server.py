@@ -15,6 +15,9 @@ from . import utils
 # 자동으로 저장될 디렉토리 이름 지정
 SAVE_DIR = "received_files"
 
+# 클라이언트 IP별 신뢰할 수 있는 서명 공개키 목록 (TOFU 메커니즘)
+TRUSTED_KEYS = {}
+
 class PQCServerHandler:
     """
     클라이언트 연결을 1:1로 처리하는 서버 프로토콜 핸들러
@@ -58,6 +61,20 @@ class PQCServerHandler:
             return False
         finally:
             self.cleanup()
+
+    def abort(self, reason: str) -> bool:
+        """클라이언트에게 상세한 에러 사유를 전달하고 연결을 안전하게 종료합니다 (Graceful Shutdown)"""
+        try:
+            utils.send_with_length(self.conn, f"ERROR:{reason}".encode('utf-8'))
+            self.conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 5))
+            self.conn.shutdown(socket.SHUT_WR)
+            self.conn.settimeout(1.0)
+            while True:
+                if not self.conn.recv(1024):
+                    break
+        except Exception:
+            pass
+        return False
 
     def perform_handshake(self) -> bool:
         """[단계 1] 핸드셰이크: KEM 키 생성 및 교환"""
@@ -165,7 +182,7 @@ class PQCServerHandler:
                 decrypted_chunk = aesgcm.decrypt(nonce, encrypted_chunk, associated_data=header)
             except Exception as e:
                 utils.log("ERROR", "CHUNK", f"인덱스 {chunk_index}에서 청크 복호화 실패(무결성 훼손 가능성): {e}", exc_info=True)
-                return False
+                return self.abort("청크 무결성 검증 실패 (데이터 변조 또는 키 불일치)")
 
             # flags & 0x01: 압축(Compression) 비트가 켜져 있는지 비트 연산으로 확인합니다.
             if flags & 0x01:
@@ -216,6 +233,14 @@ class PQCServerHandler:
         sig_public_key = utils.recv_with_length(self.conn)
         utils.log("INFO", "SIGN", f"서명 공개키 수신 완료 ({len(sig_public_key)} 바이트)")
 
+        client_ip = self.addr[0]
+        if client_ip not in TRUSTED_KEYS:
+            TRUSTED_KEYS[client_ip] = sig_public_key
+            utils.log("INFO", "VERIFY", "새로운 클라이언트 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
+        elif TRUSTED_KEYS[client_ip] != sig_public_key:
+            utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
+            return self.abort("송신자 인증 실패 (MitM 공격 방어)")
+
         signature = utils.recv_with_length(self.conn)
         utils.log("INFO", "SIGN", f"서명 수신 완료 ({len(signature)} 바이트)")
 
@@ -226,7 +251,7 @@ class PQCServerHandler:
             utils.log("FAIL", "HASH", "파일 해시 불일치")
             utils.log("INFO", "HASH", f"예상됨: {expected_hash}, 계산됨: {received_hash}")
             utils.log("FAIL", "VERIFY", "파일 무결성 검증 실패")
-            return False
+            return self.abort("파일 무결성 검증 실패 (해시 불일치)")
             
         utils.log("PASS", "HASH", "파일 해시 검증 성공")
         utils.log("INFO", "HASH", f"계산된 SHA-256: {received_hash}")
@@ -244,7 +269,7 @@ class PQCServerHandler:
             if not is_valid:
                 utils.log("FAIL", "SIGN", "서명 검증 실패")
                 utils.log("FAIL", "VERIFY", "송신자 인증 실패")
-                return False
+                return self.abort("전자서명 검증 실패 (파일 변조 또는 위장 의심)")
 
             utils.log("PASS", "SIGN", f"서명 검증 성공 (소요 시간: {sign_verify_end_time - sign_verify_start_time:.4f} 초)")
             utils.log("PASS", "VERIFY", "송신자 인증 성공")
@@ -286,6 +311,10 @@ class PQCServerHandler:
         self.temp_path = None
 
         utils.log("RESULT", "TRANSFER", f"파일이 자동으로 저장됨: {save_path}")
+        try:
+            utils.send_with_length(self.conn, b"SERVER_OK")
+        except Exception:
+            pass
         return True
 
     def cleanup(self):

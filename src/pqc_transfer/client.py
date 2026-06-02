@@ -54,6 +54,19 @@ class PQCClient:
                 self.create_and_send_signature()
                 self.finalize_transfer()
 
+            except (ConnectionResetError, BrokenPipeError):
+                try:
+                    s.settimeout(1.0)
+                    err_bytes = utils.recv_with_length(s)
+                    err_msg = err_bytes.decode("utf-8")
+                    if err_msg.startswith("ERROR:"):
+                        utils.log("ERROR", "CLIENT", f"서버가 통신을 차단했습니다: {err_msg[6:]}")
+                        utils.show_error("서버 거부", f"서버에서 보안 검증 실패로 통신을 차단했습니다.\n\n사유: {err_msg[6:]}")
+                        return
+                except Exception:
+                    pass
+                utils.log("ERROR", "CLIENT", "서버와의 연결이 끊어졌습니다. (서버 측 무결성/인증 검증 실패로 인한 통신 차단)")
+                utils.show_error("전송 실패", "서버와의 연결이 끊어졌습니다.\n\n서버 측 보안 검증(무결성/송신자 인증) 실패로 인해 통신이 차단되었을 수 있습니다.")
             except Exception as e:
                 utils.log("ERROR", "CLIENT", str(e), exc_info=True)
                 utils.show_error("전송 실패", str(e))
@@ -235,9 +248,25 @@ class PQCClient:
         metadata_for_sign = f"{self.filename}|{self.sent_size}|{self.file_hash}".encode("utf-8")
 
         sign_start_time = time.perf_counter()
-        with oqs.Signature(utils.SIG_ALG) as signer:
-            sig_public_key = signer.generate_keypair()
-            signature = signer.sign(metadata_for_sign)
+        sig_sec_file = "client_sig_sec.bin"
+        sig_pub_file = "client_sig_pub.bin"
+        
+        if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
+            with open(sig_sec_file, "rb") as f:
+                secret_key = f.read()
+            with open(sig_pub_file, "rb") as f:
+                sig_public_key = f.read()
+            with oqs.Signature(utils.SIG_ALG, secret_key=secret_key) as signer:
+                signature = signer.sign(metadata_for_sign)
+        else:
+            with oqs.Signature(utils.SIG_ALG) as signer:
+                sig_public_key = signer.generate_keypair()
+                signature = signer.sign(metadata_for_sign)
+                secret_key = signer.export_secret_key()
+            with open(sig_sec_file, "wb") as f:
+                f.write(secret_key)
+            with open(sig_pub_file, "wb") as f:
+                f.write(sig_public_key)
         sign_end_time = time.perf_counter()
 
         utils.log("PASS", "SIGN", f"ML-DSA 서명 생성 완료 (소요 시간: {sign_end_time - sign_start_time:.4f} 초)")
@@ -255,11 +284,17 @@ class PQCClient:
         [단계 6] 전송 완료 및 종료 처리
         
         서버에게 전송이 모두 완료되었음을 알리는 'CLIENT_DONE' 신호를 전송하고,
-        사용자에게 파일 전송 완료 안내 메시지를 표시합니다.
+        서버의 최종 수신 확인 응답을 대기한 뒤, 사용자에게 결과를 표시합니다.
         """
         utils.send_with_length(self.socket, b"CLIENT_DONE")
         utils.log("INFO", "TRANSFER", "CLIENT_DONE 신호 전송 완료")
-        utils.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{self.filename}")
+        
+        response = utils.recv_with_length(self.socket).decode("utf-8")
+        if response.startswith("ERROR:"):
+            raise ValueError(f"서버 거부: {response[6:]}")
+        elif response == "SERVER_OK":
+            utils.log("PASS", "TRANSFER", "서버가 정상적으로 수신을 완료했습니다")
+            utils.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{self.filename}")
 
 
 def main():

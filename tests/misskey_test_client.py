@@ -210,9 +210,24 @@ def main():
             metadata_for_sign = f"{filename}|{sent_size}|{file_hash}".encode("utf-8")
 
             sign_start_time = time.perf_counter()
-            with oqs.Signature(utils.SIG_ALG) as signer:
-                sig_public_key = signer.generate_keypair()
-                signature = signer.sign(metadata_for_sign)
+            sig_sec_file = "client_sig_sec.bin"
+            sig_pub_file = "client_sig_pub.bin"
+            if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
+                with open(sig_sec_file, "rb") as f:
+                    secret_key = f.read()
+                with open(sig_pub_file, "rb") as f:
+                    sig_public_key = f.read()
+                with oqs.Signature(utils.SIG_ALG, secret_key=secret_key) as signer:
+                    signature = signer.sign(metadata_for_sign)
+            else:
+                with oqs.Signature(utils.SIG_ALG) as signer:
+                    sig_public_key = signer.generate_keypair()
+                    signature = signer.sign(metadata_for_sign)
+                    secret_key = signer.export_secret_key()
+                with open(sig_sec_file, "wb") as f:
+                    f.write(secret_key)
+                with open(sig_pub_file, "wb") as f:
+                    f.write(sig_public_key)
             sign_end_time = time.perf_counter()
 
             utils.log("PASS", "SIGN", f"ML-DSA 서명 생성 완료 (소요 시간: {sign_end_time - sign_start_time:.4f} 초)")
@@ -230,11 +245,31 @@ def main():
             # =========================================================
             # [단계 5] 마무리 및 종료 신호 전송
             # =========================================================
-            utils.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{filename}")
-
             utils.send_with_length(s, b"CLIENT_DONE")
             utils.log("INFO", "TRANSFER", "CLIENT_DONE 신호 전송 완료")
 
+            # 서버의 최종 응답 수신
+            response = utils.recv_with_length(s).decode("utf-8")
+            if response.startswith("ERROR:"):
+                utils.log("ERROR", "SERVER", f"서버 거부: {response[6:]}")
+                utils.show_error("서버 거부", f"서버 거부: {response[6:]}")
+            elif response == "SERVER_OK":
+                utils.log("PASS", "TRANSFER", "서버가 정상적으로 수신을 완료했습니다")
+                utils.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{filename}")
+
+        except (ConnectionResetError, BrokenPipeError):
+            try:
+                s.settimeout(1.0)
+                err_bytes = utils.recv_with_length(s)
+                err_msg = err_bytes.decode("utf-8")
+                if err_msg.startswith("ERROR:"):
+                    utils.log("ERROR", "CLIENT", f"서버가 통신을 차단했습니다: {err_msg[6:]}")
+                    utils.show_error("서버 거부", f"서버에서 보안 검증 실패로 통신을 차단했습니다.\n\n사유: {err_msg[6:]}")
+                    return
+            except Exception:
+                pass
+            utils.log("INFO", "TRANSFER", "서버가 연결을 종료했습니다 (정상적인 방어 동작)")
+            utils.show_info("방어 성공", "서버가 연결을 종료했습니다 (정상적인 방어 동작)")
         except Exception as e:
             utils.log("ERROR", "CLIENT", str(e), exc_info=True)
             utils.show_error("전송 실패", str(e))

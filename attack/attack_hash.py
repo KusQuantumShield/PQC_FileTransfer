@@ -129,15 +129,42 @@ def run_attack_client(file_path: str):
             metadata_for_sign = f"{filename}|{sent_size}|{sent_hash}".encode("utf-8")
             
             # PQC 전자서명(ML-DSA 등) 생성
-            with oqs.Signature(utils.SIG_ALG) as signer:
-                sig_public_key = signer.generate_keypair()
-                signature = signer.sign(metadata_for_sign)
+            sig_sec_file = "client_sig_sec.bin"
+            sig_pub_file = "client_sig_pub.bin"
+            if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
+                with open(sig_sec_file, "rb") as f:
+                    secret_key = f.read()
+                with open(sig_pub_file, "rb") as f:
+                    sig_public_key = f.read()
+                with oqs.Signature(utils.SIG_ALG, secret_key=secret_key) as signer:
+                    signature = signer.sign(metadata_for_sign)
+            else:
+                with oqs.Signature(utils.SIG_ALG) as signer:
+                    sig_public_key = signer.generate_keypair()
+                    signature = signer.sign(metadata_for_sign)
+                    secret_key = signer.export_secret_key()
+                with open(sig_sec_file, "wb") as f:
+                    f.write(secret_key)
+                with open(sig_pub_file, "wb") as f:
+                    f.write(sig_public_key)
 
             # 8. 서명 공개키와 서명 전송
             utils.send_with_length(s, sig_public_key)
             utils.send_with_length(s, signature)
 
             utils.send_with_length(s, b"CLIENT_DONE")
+            
+            # 서버 응답 대기
+            try:
+                s.settimeout(1.0)
+                response = utils.recv_with_length(s).decode("utf-8")
+                if response.startswith("ERROR:"):
+                    print(f"[ATTACK] 서버가 공격을 정상적으로 차단했습니다: {response[6:]}")
+                else:
+                    print(f"[ATTACK] 서버 응답: {response}")
+            except Exception as e:
+                print(f"[ATTACK] 서버가 연결을 종료했습니다 (정상 방어).")
+                
             print("[ATTACK] 공격 시나리오 전송 완료")
             
         except Exception as e:
