@@ -14,6 +14,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pqc_transfer import utils
 
 def run_attack_client(file_path: str):
+    """
+    이 스크립트는 악의적인 공격자가 파일 전송 도중 첫 번째 청크(Chunk)의 데이터(Payload) 일부를
+    'HACKED'로 변조하는 '페이로드 변조 공격'을 시뮬레이션합니다.
+    (정상적인 서버라면 AES-GCM 무결성 검증에서 차단해야 합니다.)
+    """
     print(f"\n[ATTACK] === 페이로드 변조 공격(Payload Manipulation Attack) ===")
     
     if not os.path.exists(file_path):
@@ -81,12 +86,16 @@ def run_attack_client(file_path: str):
                     file_hasher.update(chunk_view)
                     
                     chunk_data = chunk_view
+                    
+                    # --- 공격 핵심 로직 시작 ---
+                    # 첫 번째 청크 데이터 전송 시, 첫 6바이트를 'HACKED' 문자로 변조
                     if chunk_index == 0:
                         print("[ATTACK] 파일의 첫 번째 청크 평문 앞부분을 'HACKED'로 변조합니다!")
                         chunk_data = b"HACKED" + bytes(chunk_view)[6:]
+                    # --- 공격 핵심 로직 끝 ---
                     
                     if use_compression:
-                        chunk_data = compressor.compress(chunk_data)
+                        chunk_data = compressor.compress(chunk_data) + compressor.flush(zlib.Z_SYNC_FLUSH)
 
                     nonce = struct.pack("!Q", chunk_index) + base_nonce_suffix
                     flags = 0x01 if use_compression else 0x00

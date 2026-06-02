@@ -49,14 +49,18 @@ if not _logger.handlers:
 
 def log(level: str, module: str, message: str, exc_info: bool = False):
     """
-    구조화된 로그를 터미널에 출력하고 로그 파일에 저장
-    기존의 print 기반 코드를 수정하지 않고 호환성을 유지하기 위해 래퍼 함수로 사용
+    구조화된 로그를 터미널에 컬러로 출력하고 동시에 파일(pqc_transfer.log)에 안전하게 저장합니다.
+    기존의 단순한 print 기반 코드를 수정하지 않고도, 모듈별/수준별 로깅을 지원하기 위해 설계된 래퍼 함수입니다.
     
-    :param level: "INFO", "PASS", "ERROR", "FAIL", "RESULT" 등 상태
-    :param module: "KEM", "FILE", "SIGN", "CONNECT", "CHUNK" 등 모듈 태그
-    :param message: 실제 로그 내용
-    :param exc_info: True일 경우 Exception의 Traceback 정보도 함께 출력 (주로 디버그용)
+    Args:
+        level (str): "INFO", "PASS", "ERROR", "FAIL", "RESULT" 등 현재 로그의 상태
+        module (str): "KEM", "FILE", "SIGN", "CONNECT", "CHUNK" 등 작업이 발생한 논리적 모듈 태그
+        message (str): 실제 출력/저장할 핵심 로그 내용
+        exc_info (bool): True일 경우 파이썬 Exception의 Traceback(스택 트레이스) 정보도 함께 출력/기록 (디버깅용)
     """
-    # 내부적으로 에러와 일반 정보를 구분하여 파이썬 표준 로거에 전달
+    # 내부적으로 에러 관련 로그("ERROR", "FAIL")와 일반 정보성 로그를 구분하여 파이썬 표준 로거에 전달합니다.
     log_level = logging.ERROR if level in ["ERROR", "FAIL"] else logging.INFO
+    
+    # extra 인자를 통해 custom_level과 module_name을 전달하여, 위에서 정의한 ColorFormatter와 
+    # _file_formatter가 해당 값을 추출해 포맷팅(예: [INFO][KEM] 메세지)할 수 있도록 합니다.
     _logger.log(log_level, message, extra={"custom_level": level, "module_name": module}, exc_info=exc_info)

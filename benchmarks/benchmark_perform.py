@@ -13,7 +13,8 @@ CSV_FILENAME = "Benchmark Results.csv"
 
 def save_results_to_csv(results, filename=CSV_FILENAME):
     """
-    성능 측정 결과를 CSV 파일로 저장합니다.
+    수집된 벤치마크 측정 결과 리스트(results)를 CSV(Comma-Separated Values) 파일 포맷으로 저장합니다.
+    추후 스프레드시트 프로그램(엑셀 등)이나 데이터 분석 도구(Pandas 등)에서 분석하기 쉽도록 헤더를 포함합니다.
     """
     fieldnames = [
         "category",
@@ -62,8 +63,12 @@ def add_result(
 
 def measure_kem_performance(results, iterations=1000):
     """
-    KEM(Key Encapsulation Mechanism) 성능을 측정합니다.
-    키 생성, 캡슐화, 역캡슐화, HKDF 세션 키 생성 속도를 계산합니다.
+    KEM(Key Encapsulation Mechanism) 성능을 측정하고, 결과를 results 리스트에 딕셔너리 형태로 저장합니다.
+    성능 지표:
+      1. 키 생성 (Keypair Generation): 공개키/비밀키 쌍을 생성하는 시간
+      2. 캡슐화 (Encapsulation): 공유 비밀키를 생성하고 서버의 공개키로 암호화(캡슐화)하는 시간
+      3. 역캡슐화 (Decapsulation): 수신한 암호문을 자신의 비밀키로 풀어 공유 비밀키를 복구하는 시간
+      4. HKDF: 교환된 공유 비밀키를 실제 사용할 32바이트 AES 세션 키로 유도(Derive)하는 시간
     """
     print(f"--- KEM 성능 측정 ({utils.KEM_ALG}, {iterations}회 반복) ---")
 
@@ -158,8 +163,9 @@ def measure_kem_performance(results, iterations=1000):
 
 def measure_dsa_performance(results, iterations=1000):
     """
-    DSA(Digital Signature Algorithm) 성능을 측정합니다.
-    키 생성, 서명, 검증 속도를 계산합니다.
+    PQC DSA(디지털 서명 알고리즘) 성능을 측정하고, 결과를 results 리스트에 저장합니다.
+    파일 무결성 검증과 송신자 인증에 걸리는 부하를 분석하기 위해,
+    키 쌍 생성, 서명(Sign), 검증(Verify)의 3가지 핵심 동작에 대한 평균 처리 시간(ms/op)을 산출합니다.
     """
     print(f"--- DSA 성능 측정 ({utils.SIG_ALG}, {iterations}회 반복) ---")
 
@@ -237,8 +243,9 @@ def measure_dsa_performance(results, iterations=1000):
 
 def measure_aes_performance(results, chunk_size=1024 * 1024, iterations=100):
     """
-    AES-GCM 대칭키 암호화 성능을 측정합니다.
-    대용량 데이터(chunk) 처리 시 속도와 처리량(Throughput)을 계산합니다.
+    AES-GCM (대칭키 암호) 성능을 측정하고, 결과를 results 리스트에 추가합니다.
+    대용량 파일 전송을 시뮬레이션하기 위해 설정된 chunk_size(기본 1MB) 단위로 데이터를 암호화 및 복호화하여
+    1회당 처리 소요 시간(ms/op)뿐만 아니라 초당 처리량(Throughput, MB/s)을 함께 측정합니다.
     """
     print(
         f"--- AES-GCM 성능 측정 "
@@ -307,7 +314,10 @@ def measure_aes_performance(results, chunk_size=1024 * 1024, iterations=100):
 
 def measure_key_signature_sizes(results):
     """
-    KEM, DSA, AES-GCM, Chunk header에서 사용되는 주요 데이터 크기를 측정합니다.
+    PQC 알고리즘은 기존 RSA/ECC에 비해 키와 서명의 크기가 매우 크다는 특징이 있습니다.
+    따라서 KEM(공개키, 암호문, 비밀키), DSA(공개키, 서명) 및 AES-GCM(논스), 전송 프로토콜(청크 헤더)에서 
+    발생하는 실제 바이트(Bytes) 단위의 크기를 정확히 측정하여 기록합니다.
+    이 데이터는 네트워크 대역폭(Bandwidth) 사용량 분석에 핵심적인 자료가 됩니다.
     """
     print(f"--- 키 및 서명 크기 분석 ({utils.KEM_ALG}, {utils.SIG_ALG}) ---")
 

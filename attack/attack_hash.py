@@ -14,6 +14,10 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pqc_transfer import utils
 
 def run_attack_client(file_path: str):
+    """
+    이 스크립트는 파일 전송 도중 악의적인 공격자가 원본 데이터는 정상적으로 보내되,
+    최종 무결성 검증을 위한 파일 해시값을 변조하여 전송하는 '해시 변조 공격'을 시뮬레이션합니다.
+    """
     print(f"\n[ATTACK] === 해시 변조 공격(Hash Manipulation Attack) ===")
     
     if not os.path.exists(file_path):
@@ -84,7 +88,7 @@ def run_attack_client(file_path: str):
 
                     
                     if use_compression:
-                        chunk_data = compressor.compress(chunk_data)
+                        chunk_data = compressor.compress(chunk_data) + compressor.flush(zlib.Z_SYNC_FLUSH)
 
                     nonce = struct.pack("!Q", chunk_index) + base_nonce_suffix
                     flags = 0x01 if use_compression else 0x00
@@ -101,11 +105,14 @@ def run_attack_client(file_path: str):
 
             file_hash = file_hasher.hexdigest()
             
-            sent_hash = file_hash
+            # --- 공격 핵심 로직 시작 ---
+            # 원본 파일의 실제 해시(file_hash) 대신 가짜 해시(sent_hash)를 강제로 할당
             print("[ATTACK] 파일 해시를 모두 '0'으로 채워진 가짜 해시로 변조합니다!")
             sent_hash = '0' * 64
             
+            # 변조된 해시값을 서버로 전송
             s.sendall(sent_hash.encode("utf-8"))
+            # --- 공격 핵심 로직 끝 ---
             
             metadata_for_sign = f"{filename}|{sent_size}|{sent_hash}".encode("utf-8")
             with oqs.Signature(utils.SIG_ALG) as signer:

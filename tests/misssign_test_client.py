@@ -159,7 +159,10 @@ def main():
                     
                     # 일반 데이터 청크 전송 (압축 포함, Z_FINISH 생략)
                     flags = 0x01 if use_compression else 0x00
-                    chunk_data = compressor.compress(chunk_view) if use_compression else chunk_view
+                    if use_compression:
+                        chunk_data = compressor.compress(chunk_view) + compressor.flush(zlib.Z_SYNC_FLUSH)
+                    else:
+                        chunk_data = chunk_view
 
                     nonce = struct.pack("!Q", chunk_index) + base_nonce_suffix
                     # [청크 헤더 구조: 총 13바이트]

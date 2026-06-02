@@ -43,6 +43,8 @@ pqc_transfer.log
 # Project specific
 received_files/
 benchmarks/*.csv
+/test_*.txt
+/Benchmark Results.csv
 
 # IDEs and Editors
 .vscode/

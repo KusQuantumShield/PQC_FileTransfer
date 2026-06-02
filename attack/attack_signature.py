@@ -14,6 +14,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pqc_transfer import utils
 
 def run_attack_client(file_path: str):
+    """
+    이 스크립트는 악의적인 공격자가 파일 전송을 모두 마친 후,
+    PQC(양자 내성 암호) 전자서명 값을 임의로 1바이트 변조하여 전송하는 '서명 변조 공격'을 시뮬레이션합니다.
+    (정상적인 서버라면 서명 검증 단계에서 실패하여 차단해야 합니다.)
+    """
     print(f"\n[ATTACK] === 서명 변조 공격(Signature Manipulation Attack) ===")
     
     if not os.path.exists(file_path):
@@ -84,7 +89,7 @@ def run_attack_client(file_path: str):
 
                     
                     if use_compression:
-                        chunk_data = compressor.compress(chunk_data)
+                        chunk_data = compressor.compress(chunk_data) + compressor.flush(zlib.Z_SYNC_FLUSH)
 
                     nonce = struct.pack("!Q", chunk_index) + base_nonce_suffix
                     flags = 0x01 if use_compression else 0x00
@@ -111,10 +116,13 @@ def run_attack_client(file_path: str):
                 sig_public_key = signer.generate_keypair()
                 signature = signer.sign(metadata_for_sign)
 
+            # --- 공격 핵심 로직 시작 ---
             print("[ATTACK] 서명 데이터 변조 시뮬레이션")
             signature = bytearray(signature)
+            # 서명의 첫 번째 바이트 값을 임의로 변경하여 서명을 손상시킴
             signature[0] = (signature[0] + 1) % 256
             signature = bytes(signature)
+            # --- 공격 핵심 로직 끝 ---
 
             utils.send_with_length(s, sig_public_key)
             utils.send_with_length(s, signature)
