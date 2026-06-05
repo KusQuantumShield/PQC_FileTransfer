@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 
 
 CSV_FILENAME = "benchmark_RSA.csv"
-ITERATIONS = 100
+ITERATIONS = 1000
 
 RSA_KEY_SIZE = 2048
 AES_SESSION_KEY_SIZE = 32
