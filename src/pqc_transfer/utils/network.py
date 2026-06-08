@@ -1,46 +1,42 @@
 import socket
 import struct
 
+import time
+
 def recv_exact_into(sock: socket.socket, view: memoryview, length: int) -> None:
     """
     미리 할당된 memoryview 버퍼(view)에 정확히 지정된 length 바이트만큼 데이터를 수신하여 직접 저장합니다.
     이 함수는 새로운 메모리 객체를 매번 생성하지 않고 기존 버퍼를 재사용하므로(Zero-copy),
     대용량 청크 데이터를 빠르게 수신할 때 메모리 효율과 속도가 매우 높습니다.
     """
-    # 현재까지 수신한 바이트 수를 기록할 변수 초기화
     pos = 0
-    # 요구한 길이를 모두 채울 때까지 루프 반복
+    start_time = time.time()
     while pos < length:
-        # 소켓 버퍼에서 남은 길이만큼 데이터를 읽어 view의 해당 위치에 직접 덮어씀
         packet_len = sock.recv_into(view[pos:length])
-        # 수신된 바이트가 0이라는 것은 상대방이 연결을 끊었음을 의미
         if not packet_len:
             raise ConnectionError("네트워크 연결이 예기치 않게 종료되었습니다.")
-        # 실제로 읽어온 바이트 수만큼 위치(pos)를 전진
         pos += packet_len
+        # Slowloris 방어: 단일 청크 수신에 30초 이상 걸리면 강제 차단
+        if time.time() - start_time > 30.0:
+            raise TimeoutError("데이터 수신 속도가 너무 느립니다 (Slowloris 방어).")
 
 def recv_exact(sock: socket.socket, length: int) -> bytes:
     """
     소켓 버퍼에서 정확히 지정된 length 바이트만큼의 데이터를 읽어올 때까지 대기하며 수신합니다.
-    TCP는 스트림 기반 프로토콜이므로 데이터가 한 번에 도착하지 않고 잘려서(fragmentation) 도착할 수 있습니다.
-    따라서 원하는 길이를 모두 받을 때까지 recv()를 반복 호출해야 합니다.
     """
-    # 요구한 크기만큼의 가변 바이트 배열(bytearray) 생성
     buf = bytearray(length)
-    # bytearray를 zero-copy로 슬라이싱하기 위해 memoryview 객체 생성
     view = memoryview(buf)
     pos = 0
-    # 요구한 바이트 수를 모두 수신할 때까지 루프 반복
+    start_time = time.time()
     while pos < length:
-        # 아직 수신하지 못한 뒷부분(view[pos:]) 공간에 데이터를 채워넣음
         packet_len = sock.recv_into(view[pos:])
         if not packet_len:
-            # 상대방이 연결을 정상적으로 종료했거나 네트워크(TCP 세션)가 끊어진 경우 예외 발생
             raise ConnectionError("네트워크 연결이 예기치 않게 종료되었습니다.")
         pos += packet_len
+        # Slowloris 방어: 단일 청크 수신에 30초 이상 걸리면 강제 차단
+        if time.time() - start_time > 30.0:
+            raise TimeoutError("데이터 수신 속도가 너무 느립니다 (Slowloris 방어).")
     
-    # 파이썬 암호화 라이브러리(liboqs-python, cryptography) 등은 대부분
-    # 순수 bytes 객체를 요구하므로, 내부적으로 사용한 bytearray를 bytes로 변환하여 반환
     return bytes(buf)
 
 def recv_with_length(sock: socket.socket, max_len: int = 100 * 1024 * 1024) -> bytes:

@@ -1,8 +1,13 @@
 import os
 import sys
 import hashlib
-import tkinter as tk
-from tkinter import filedialog, messagebox
+
+try:
+    import tkinter as tk
+    from tkinter import filedialog, messagebox
+    HAS_TKINTER = True
+except ImportError:
+    HAS_TKINTER = False
 
 from .config import CHUNK_SIZE
 from .logger import log
@@ -37,8 +42,8 @@ def _get_tk_root():
 
 def select_file() -> str:
     """사용자가 전송할 파일을 탐색기를 통해 직접 선택할 수 있도록 다이얼로그를 띄움"""
-    if sys.platform != "win32" and not os.environ.get("DISPLAY"):
-        log("ERROR", "GUI", "Headless 모드에서는 파일 선택창을 띄울 수 없습니다. 명령줄 인자를 사용하세요 (예: python3 client.py <파일명>)")
+    if not HAS_TKINTER or (sys.platform != "win32" and not os.environ.get("DISPLAY")):
+        log("ERROR", "GUI", "GUI 환경(tkinter)을 사용할 수 없습니다. 명령줄 인자를 사용하세요 (예: python3 client.py <파일명>)")
         return ""
         
     root = _get_tk_root()
@@ -54,8 +59,8 @@ def select_save_directory(filename: str) -> str:
     서버 측에서 수신된 파일을 저장할 폴더를 선택하는 다이얼로그를 띄움
     GUI 환경이 아닌 경우(Headless 서버 등)를 대비한 예외 처리도 포함되어 있음
     """
-    if sys.platform != "win32" and not os.environ.get("DISPLAY"):
-        log("WARN", "GUI", "Headless(GUI 없음) 모드: 기본 수신 폴더에 저장합니다.")
+    if not HAS_TKINTER or (sys.platform != "win32" and not os.environ.get("DISPLAY")):
+        log("WARN", "GUI", "GUI 없음 모드: 기본 수신 폴더에 저장합니다.")
         return ""
     
     root = _get_tk_root()
@@ -66,7 +71,7 @@ def select_save_directory(filename: str) -> str:
 
 def show_info(title: str, message: str) -> None:
     """정보 전달용 알림 팝업(Info MessageBox)을 띄움. GUI가 없으면 콘솔에 출력"""
-    if sys.platform != "win32" and not os.environ.get("DISPLAY"):
+    if not HAS_TKINTER or (sys.platform != "win32" and not os.environ.get("DISPLAY")):
         log("INFO", "POPUP", f"{title} - {message.replace(chr(10), ' ')}")
         return
     root = _get_tk_root()
@@ -75,7 +80,7 @@ def show_info(title: str, message: str) -> None:
 
 def show_error(title: str, message: str) -> None:
     """오류 발생 시 에러 팝업(Error MessageBox)을 띄움. GUI가 없으면 콘솔에 출력"""
-    if sys.platform != "win32" and not os.environ.get("DISPLAY"):
+    if not HAS_TKINTER or (sys.platform != "win32" and not os.environ.get("DISPLAY")):
         log("ERROR", "POPUP", f"{title} - {message.replace(chr(10), ' ')}")
         return
     root = _get_tk_root()

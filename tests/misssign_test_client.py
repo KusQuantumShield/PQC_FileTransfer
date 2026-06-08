@@ -11,13 +11,12 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 from pqc_transfer import utils
 
-def main():
+def test_misssign_test():
     utils.log("INFO", "SYSTEM", "--- PQC 파일 전송 클라이언트 초기화 ---")
     utils.log("INFO", "SYSTEM", f"설정된 KEM 알고리즘: {utils.KEM_ALG}")
     utils.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {utils.SIG_ALG}")
     utils.log("INFO", "SYSTEM", f"청크(Chunk) 크기: {utils.CHUNK_SIZE} 바이트")
 
-    import sys
     if len(sys.argv) > 1:
         file_path = sys.argv[1]
     else:
@@ -199,12 +198,18 @@ def main():
             # 계산된 최종 파일 해시 전송
             s.sendall(file_hash.encode("utf-8"))
             
+            # 서버로부터 Replay 방지용 Challenge Nonce 수신
+            challenge_nonce = utils.recv_with_length(s).decode("utf-8")
+            if challenge_nonce.startswith("ERROR:"):
+                raise ValueError(f"서버 거부: {challenge_nonce[6:]}")
+            
             # 무결성 검증을 위한 서명 데이터 조합 (Canonicalization 취약점 방지를 위해 구분자 사용)
-            metadata_for_sign = f"{filename}|{sent_size}|{file_hash}".encode("utf-8")
+            session_key_hash = utils.hash_ss(session_key)
+            metadata_for_sign = f"{filename}|{sent_size}|{file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
             sign_start_time = time.perf_counter()
-            sig_sec_file = "client_sig_sec.bin"
-            sig_pub_file = "client_sig_pub.bin"
+            sig_sec_file = os.path.join(os.path.dirname(__file__), "..", "client_sig_sec.bin")
+            sig_pub_file = os.path.join(os.path.dirname(__file__), "..", "client_sig_pub.bin")
             if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
                 with open(sig_sec_file, "rb") as f:
                     secret_key = f.read()
@@ -217,7 +222,9 @@ def main():
                     sig_public_key = signer.generate_keypair()
                     signature = signer.sign(metadata_for_sign)
                     secret_key = signer.export_secret_key()
-                with open(sig_sec_file, "wb") as f:
+                import stat
+                fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+                with os.fdopen(fd, "wb") as f:
                     f.write(secret_key)
                 with open(sig_pub_file, "wb") as f:
                     f.write(sig_public_key)
@@ -257,7 +264,7 @@ def main():
                 utils.log("PASS", "TRANSFER", "서버가 정상적으로 수신을 완료했습니다")
                 utils.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{filename}")
 
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionResetError, BrokenPipeError, ConnectionError):
             try:
                 s.settimeout(1.0)
                 err_bytes = utils.recv_with_length(s)
@@ -277,4 +284,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    test_misssign_test()

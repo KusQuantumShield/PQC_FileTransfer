@@ -123,14 +123,19 @@ def run_attack_client(file_path: str):
             
             # 변조된 해시값을 서버로 전송
             s.sendall(sent_hash.encode("utf-8"))
-            # --- 공격 핵심 로직 끝 ---
+            
+            # 서버로부터 Replay 방지용 Challenge Nonce 수신
+            challenge_nonce = utils.recv_with_length(s).decode("utf-8")
+            if challenge_nonce.startswith("ERROR:"):
+                raise ValueError(f"서버 거부: {challenge_nonce[6:]}")
             
             # 7. 서명할 메타데이터 구성 (변조된 해시 사용)
-            metadata_for_sign = f"{filename}|{sent_size}|{sent_hash}".encode("utf-8")
+            session_key_hash = utils.hash_ss(session_key)
+            metadata_for_sign = f"{filename}|{sent_size}|{sent_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
             
             # PQC 전자서명(ML-DSA 등) 생성
-            sig_sec_file = "client_sig_sec.bin"
-            sig_pub_file = "client_sig_pub.bin"
+            sig_sec_file = os.path.join(os.path.dirname(__file__), "..", "client_sig_sec.bin")
+            sig_pub_file = os.path.join(os.path.dirname(__file__), "..", "client_sig_pub.bin")
             if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
                 with open(sig_sec_file, "rb") as f:
                     secret_key = f.read()

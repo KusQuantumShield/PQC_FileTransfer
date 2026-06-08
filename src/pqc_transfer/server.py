@@ -6,6 +6,7 @@ import tempfile
 import shutil
 import hashlib
 import time
+import threading
 
 import oqs
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -17,6 +18,12 @@ SAVE_DIR = "received_files"
 
 # 클라이언트 IP별 신뢰할 수 있는 서명 공개키 목록 (TOFU 메커니즘)
 TRUSTED_KEYS = {}
+
+# 파일 저장 시 이름 충돌 방지를 위한 전역 락
+_file_save_lock = threading.Lock()
+
+# TOFU(Trust On First Use) 신뢰 목록 동시 접근 제어를 위한 전역 락
+_tofu_lock = threading.Lock()
 
 class PQCServerHandler:
     """
@@ -56,6 +63,9 @@ class PQCServerHandler:
             if not self.verify_signature(): return False
             if not self.finalize_transfer(): return False
             return True
+        except (ConnectionError, ConnectionResetError, BrokenPipeError) as e:
+            utils.log("ERROR", "SERVER", f"클라이언트 연결 끊김: {e}")
+            return False
         except Exception as e:
             utils.log("ERROR", "SERVER", str(e), exc_info=True)
             return False
@@ -69,9 +79,12 @@ class PQCServerHandler:
             self.conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 5))
             self.conn.shutdown(socket.SHUT_WR)
             self.conn.settimeout(1.0)
-            while True:
-                if not self.conn.recv(1024):
+            bytes_drained = 0
+            while bytes_drained < 1024 * 1024:  # 최대 1MB까지만 버퍼를 비우고 강제 종료
+                chunk = self.conn.recv(1024)
+                if not chunk:
                     break
+                bytes_drained += len(chunk)
         except Exception:
             pass
         return False
@@ -98,7 +111,7 @@ class PQCServerHandler:
                 utils.log("PASS", "KEM", "캡슐화 해제 완료")
             except Exception as e:
                 utils.log("ERROR", "KEM", f"캡슐화 해제 실패: {e}", exc_info=True)
-                return False
+                return self.abort("KEM 캡슐화 해제 실패 (변조 또는 불일치)")
 
         utils.log("INFO", "KEY", f"공유 비밀키 해시: {utils.hash_ss(shared_secret)}")
         # 5. HKDF를 이용해 공유 비밀키로부터 AES-GCM 세션 키 도출
@@ -122,9 +135,16 @@ class PQCServerHandler:
 
         if not self.filename or len(self.filename) > 255 or self.filename in (".", ".."):
             utils.log("FAIL", "FILE", "유효하지 않은 파일명")
-            raise ValueError("Invalid filename")
+            return self.abort("유효하지 않은 파일명")
 
         self.original_filesize = struct.unpack("!Q", utils.recv_exact(self.conn, 8))[0]
+        
+        # Zip Bomb 및 디스크 고갈(DoS) 방지를 위해 최대 파일 크기 제한 (예: 10GB)
+        MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024 # 10 GB
+        if self.original_filesize > MAX_FILE_SIZE:
+            utils.log("ERROR", "FILE", f"파일 크기가 서버 제한({MAX_FILE_SIZE} 바이트)을 초과했습니다.")
+            return self.abort("파일 크기 제한 초과 (DoS 방어)")
+            
         utils.log("INFO", "FILE", f"파일명 수신 완료: {self.filename}")
         utils.log("INFO", "FILE", f"예상 파일 크기: {self.original_filesize} 바이트")
         return True
@@ -162,12 +182,12 @@ class PQCServerHandler:
             # 공격자가 청크 순서를 조작하거나 누락시키는 재전송(Replay)/순서 조작 공격을 방지하기 위한 검증입니다.
             if chunk_index != expected_chunk_index:
                 utils.log("ERROR", "CHUNK", f"청크 인덱스 불일치: 예상됨={expected_chunk_index}, 수신됨={chunk_index}")
-                raise ValueError(f"Chunk index mismatch")
+                return self.abort(f"청크 인덱스 불일치")
 
             # 수신할 페이로드 길이가 유효한 범위를 벗어나는지 확인하여 버퍼 오버플로우 공격을 방지합니다.
             if payload_len <= 0 or payload_len > MAX_PAYLOAD_SIZE:
                 utils.log("ERROR", "CHUNK", "유효하지 않은 페이로드 길이")
-                raise ValueError(f"Invalid payload length: {payload_len}")
+                return self.abort(f"유효하지 않은 페이로드 길이")
 
             # 계산된 페이로드 길이만큼 정확히 데이터를 수신하여 recv_view 버퍼에 바로 채워 넣습니다.
             utils.recv_exact_into(self.conn, recv_view, payload_len)
@@ -181,7 +201,7 @@ class PQCServerHandler:
                 # header 전체를 Associated Data(AAD)로 사용하여, 누군가 헤더 정보(예: 인덱스나 플래그)를 변조하면 복호화가 실패하도록 합니다.
                 decrypted_chunk = aesgcm.decrypt(nonce, encrypted_chunk, associated_data=header)
             except Exception as e:
-                utils.log("ERROR", "CHUNK", f"인덱스 {chunk_index}에서 청크 복호화 실패(무결성 훼손 가능성): {e}", exc_info=True)
+                utils.log("ERROR", "CHUNK", f"인덱스 {chunk_index}에서 청크 복호화 실패(무결성 훼손 가능성): {e}")
                 return self.abort("청크 무결성 검증 실패 (데이터 변조 또는 키 불일치)")
 
             # flags & 0x01: 압축(Compression) 비트가 켜져 있는지 비트 연산으로 확인합니다.
@@ -196,15 +216,22 @@ class PQCServerHandler:
                         return False
                 except Exception as e:
                     utils.log("ERROR", "COMPRESS", f"청크 {chunk_index} 압축 해제 실패: {e}")
-                    return False
+                    return self.abort("데이터 압축 해제 실패 (데이터 손상 의심)")
 
             # 안전하게 복호화 및 압축 해제된 순수 원본 데이터를 임시 파일에 기록합니다.
+            if len(decrypted_chunk) == 0 and not (flags & 0x02):
+                utils.log("ERROR", "CHUNK", "의미 없는 0바이트 청크 수신 (무한 루프 DoS 방어)")
+                return self.abort("비정상적인 0바이트 청크 데이터")
+                
             self.temp_file.write(decrypted_chunk)
             
             # 파일 전체의 무결성을 최종 검증하기 위해 복호화된 원본 데이터를 SHA-256 해시 함수에 업데이트합니다.
             self.file_hasher.update(decrypted_chunk)
             # 전체 진행률을 추적하기 위해 수신된 바이트 수를 누적합니다.
             self.received_size += len(decrypted_chunk)
+            if self.received_size > self.original_filesize:
+                utils.log("ERROR", "FILE", "수신된 데이터가 선언된 파일 크기를 초과했습니다 (DoS 방어)")
+                return self.abort("수신 파일 크기 초과")
 
             utils.log("INFO", "CHUNK", f"청크 {chunk_index} 수신 완료 ({self.received_size}/{self.original_filesize} 바이트)")
             expected_chunk_index += 1
@@ -230,16 +257,23 @@ class PQCServerHandler:
         expected_hash = utils.recv_exact(self.conn, 64).decode("utf-8")
         utils.log("INFO", "HASH", f"클라이언트가 전송한 원본 SHA-256: {expected_hash}")
 
+        # Replay 공격(재전송 공격) 방지를 위한 1회용 Challenge Nonce 생성 및 전송
+        import os
+        challenge_nonce = os.urandom(32).hex()
+        utils.send_with_length(self.conn, challenge_nonce.encode("utf-8"))
+        utils.log("INFO", "VERIFY", "Replay 방지용 Challenge Nonce 전송 완료")
+
         sig_public_key = utils.recv_with_length(self.conn)
         utils.log("INFO", "SIGN", f"서명 공개키 수신 완료 ({len(sig_public_key)} 바이트)")
 
         client_ip = self.addr[0]
-        if client_ip not in TRUSTED_KEYS:
-            TRUSTED_KEYS[client_ip] = sig_public_key
-            utils.log("INFO", "VERIFY", "새로운 클라이언트 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
-        elif TRUSTED_KEYS[client_ip] != sig_public_key:
-            utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
-            return self.abort("송신자 인증 실패 (MitM 공격 방어)")
+        with _tofu_lock:
+            if client_ip not in TRUSTED_KEYS:
+                TRUSTED_KEYS[client_ip] = sig_public_key
+                utils.log("INFO", "VERIFY", "새로운 클라이언트 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
+            elif TRUSTED_KEYS[client_ip] != sig_public_key:
+                utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
+                return self.abort("송신자 인증 실패 (MitM 공격 방어)")
 
         signature = utils.recv_with_length(self.conn)
         utils.log("INFO", "SIGN", f"서명 수신 완료 ({len(signature)} 바이트)")
@@ -247,6 +281,11 @@ class PQCServerHandler:
         utils.log("PASS", "FILE", "파일 크기 동적 동기화 성공")
 
         received_hash = self.file_hasher.hexdigest()
+        
+        if self.received_size != self.original_filesize:
+            utils.log("FAIL", "FILE", f"파일 크기 불일치: 선언됨={self.original_filesize}, 수신됨={self.received_size}")
+            return self.abort("불완전한 파일 전송 (크기 불일치)")
+            
         if received_hash != expected_hash:
             utils.log("FAIL", "HASH", "파일 해시 불일치")
             utils.log("INFO", "HASH", f"예상됨: {expected_hash}, 계산됨: {received_hash}")
@@ -256,8 +295,9 @@ class PQCServerHandler:
         utils.log("PASS", "HASH", "파일 해시 검증 성공")
         utils.log("INFO", "HASH", f"계산된 SHA-256: {received_hash}")
 
-        # 서명 검증을 위한 메타데이터 재구성: 클라이언트와 동일하게 구성
-        metadata_for_verify = f"{self.filename}|{self.received_size}|{received_hash}".encode("utf-8")
+        # 무결성 검증을 위한 서명 데이터 조합 (MitM 세션 바인딩 및 Replay 방지 난수 포함)
+        session_key_hash = utils.hash_ss(self.session_key)
+        metadata_for_verify = f"{self.filename}|{self.received_size}|{received_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
         try:
             sign_verify_start_time = time.perf_counter()
@@ -275,7 +315,7 @@ class PQCServerHandler:
             utils.log("PASS", "VERIFY", "송신자 인증 성공")
         except Exception as e:
             utils.log("ERROR", "SIGN", f"서명 검증 오류: {e}", exc_info=True)
-            return False
+            return self.abort("전자서명 검증 처리 중 예기치 않은 오류 발생")
 
         utils.log("PASS", "VERIFY", "파일 무결성: 통과")
         utils.log("PASS", "VERIFY", "송신자 인증: 통과")
@@ -298,17 +338,20 @@ class PQCServerHandler:
 
         target_dir = SAVE_DIR
         base_name, ext = os.path.splitext(self.filename)
-        save_path = os.path.join(target_dir, self.filename)
-        counter = 1
-        while os.path.exists(save_path):
-            save_path = os.path.join(target_dir, f"{base_name}({counter}){ext}")
-            counter += 1
-            
+        
         if not self.temp_file.closed:
             self.temp_file.close()
 
-        shutil.move(self.temp_path, save_path)
-        self.temp_path = None
+        # 전역 락을 사용하여 파일 이름 중복 확인과 파일 이동 간의 경쟁 상태(Race Condition) 방지
+        with _file_save_lock:
+            save_path = os.path.join(target_dir, self.filename)
+            counter = 1
+            while os.path.exists(save_path):
+                save_path = os.path.join(target_dir, f"{base_name}({counter}){ext}")
+                counter += 1
+                
+            shutil.move(self.temp_path, save_path)
+            self.temp_path = None
 
         utils.log("RESULT", "TRANSFER", f"파일이 자동으로 저장됨: {save_path}")
         try:
@@ -322,9 +365,6 @@ class PQCServerHandler:
         소켓 자원 및 임시 파일을 안전하게 정리합니다.
         전송 중 오류가 발생했거나, 연결이 종료된 경우 남아있는 시스템 자원(파일, 네트워크 연결 등)을 해제합니다.
         """
-        self.conn.close()
-        utils.log("INFO", "CONNECT", "연결이 종료되었습니다")
-        
         try:
             if self.temp_file and not self.temp_file.closed:
                 self.temp_file.close()
@@ -337,41 +377,71 @@ class PQCServerHandler:
                 utils.log("INFO", "FILE", "임시 파일이 삭제되었습니다")
             except Exception as e:
                 utils.log("ERROR", "FILE", f"임시 파일 삭제 실패: {e}")
+                
+        try:
+            if self.conn:
+                self.conn.close()
+                utils.log("INFO", "CONNECT", "연결이 종료되었습니다")
+        except Exception:
+            pass
 
 
 def main():
     """
     서버 프로그램의 진입점(Entry Point)입니다.
     소켓을 열어 포트를 바인딩하고 클라이언트의 연결을 대기합니다.
-    연결이 수립되면 독립적인 핸들러(PQCServerHandler)를 통해 클라이언트와의 통신을 관리합니다.
+    연결이 수립되면 독립적인 핸들러(PQCServerHandler)를 백그라운드 스레드에서 실행하여 다중 클라이언트를 동시 처리합니다.
     """
     utils.log("INFO", "SYSTEM", "--- PQC 파일 전송 서버 초기화 ---")
     utils.log("INFO", "SYSTEM", f"설정된 KEM 알고리즘: {utils.KEM_ALG}")
     utils.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {utils.SIG_ALG}")
     utils.log("INFO", "SYSTEM", f"청크(Chunk) 크기: {utils.CHUNK_SIZE} 바이트")
 
+    # 최대 동시 접속자 수를 제한하여 스레드 폭발(Thread Exhaustion) DoS 공격 방어
+    MAX_CONCURRENT_CLIENTS = 100
+    connection_semaphore = threading.Semaphore(MAX_CONCURRENT_CLIENTS)
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
         s.bind((utils.HOST, utils.PORT))
-        s.listen(1)
+        s.listen(10)  # 다중 접속을 위해 백로그 증가
         
-        utils.log("INFO", "SYSTEM", f"PQC 보안 서버 데몬이 시작되었습니다")
+        utils.log("INFO", "SYSTEM", f"PQC 보안 서버 데몬이 시작되었습니다 (최대 동시 접속: {MAX_CONCURRENT_CLIENTS}명)")
         utils.log("INFO", "CONNECT", f"{utils.PORT} 포트에서 수신 대기 중")
 
         while True:
-            utils.log("INFO", "CONNECT", "연결 대기 중")
-            conn, addr = s.accept()
-            
-            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
-            conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-            conn.settimeout(15.0)
-            
-            handler = PQCServerHandler(conn, addr)
-            if handler.handle():
-                utils.log("RESULT", "TRANSFER", "파일 전송이 완료되었습니다")
+            try:
+                conn, addr = s.accept()
+                
+                # 동시 접속자 수 제한 검사
+                if not connection_semaphore.acquire(blocking=False):
+                    utils.log("ERROR", "SYSTEM", f"최대 동시 접속자 수({MAX_CONCURRENT_CLIENTS})를 초과했습니다. 연결을 거부합니다: {addr}")
+                    conn.close()
+                    continue
+                
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+                conn.settimeout(15.0)
+                
+                handler = PQCServerHandler(conn, addr)
+                
+                def handle_client(h):
+                    try:
+                        if h.handle():
+                            utils.log("RESULT", "TRANSFER", "파일 전송이 완료되었습니다")
+                    finally:
+                        connection_semaphore.release()
+                
+                client_thread = threading.Thread(target=handle_client, args=(handler,), daemon=True)
+                client_thread.start()
+            except KeyboardInterrupt:
+                utils.log("INFO", "SYSTEM", "서버를 종료합니다.")
+                break
+            except Exception as e:
+                utils.log("ERROR", "SYSTEM", f"서버 수신 오류: {e}")
 
 if __name__ == "__main__":
     main()

@@ -54,7 +54,7 @@ class PQCClient:
                 self.create_and_send_signature()
                 self.finalize_transfer()
 
-            except (ConnectionResetError, BrokenPipeError):
+            except (ConnectionResetError, BrokenPipeError, ConnectionError):
                 try:
                     s.settimeout(1.0)
                     err_bytes = utils.recv_with_length(s)
@@ -244,12 +244,19 @@ class PQCClient:
         # 1. 계산된 파일 원본의 전체 해시값 전송
         self.socket.sendall(self.file_hash.encode("utf-8"))
         
-        # 2. 서명할 메타데이터 구성: 파일명|수신크기|해시값
-        metadata_for_sign = f"{self.filename}|{self.sent_size}|{self.file_hash}".encode("utf-8")
+        # 서버로부터 Replay 방지용 Challenge Nonce 수신
+        challenge_nonce = utils.recv_with_length(self.socket).decode("utf-8")
+        if challenge_nonce.startswith("ERROR:"):
+            raise ValueError(f"서버 거부: {challenge_nonce[6:]}")
+        utils.log("INFO", "SIGN", "서버로부터 Replay 방지용 Challenge Nonce 수신 완료")
+        
+        # 2. 서명할 메타데이터 구성: 파일명|수신크기|해시값|세션키해시|챌린지논스
+        session_key_hash = utils.hash_ss(self.session_key)
+        metadata_for_sign = f"{self.filename}|{self.sent_size}|{self.file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
         sign_start_time = time.perf_counter()
-        sig_sec_file = "client_sig_sec.bin"
-        sig_pub_file = "client_sig_pub.bin"
+        sig_sec_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "client_sig_sec.bin"))
+        sig_pub_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "client_sig_pub.bin"))
         
         if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
             with open(sig_sec_file, "rb") as f:
@@ -263,8 +270,13 @@ class PQCClient:
                 sig_public_key = signer.generate_keypair()
                 signature = signer.sign(metadata_for_sign)
                 secret_key = signer.export_secret_key()
-            with open(sig_sec_file, "wb") as f:
+                
+            # [보안 패치] 개인키 파일은 소유자만 읽고 쓸 수 있도록(0o600) 안전하게 생성
+            import stat
+            fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+            with os.fdopen(fd, "wb") as f:
                 f.write(secret_key)
+                
             with open(sig_pub_file, "wb") as f:
                 f.write(sig_public_key)
         sign_end_time = time.perf_counter()
@@ -316,9 +328,9 @@ def main():
         utils.log("INFO", "FILE", "사용자가 파일 선택을 취소했습니다")
         return
 
-    if not os.path.exists(file_path):
-        utils.log("ERROR", "FILE", f"파일을 찾을 수 없습니다: {file_path}")
-        utils.show_error("파일 오류", f"파일을 찾을 수 없습니다.\n\n{file_path}")
+    if not os.path.isfile(file_path):
+        utils.log("ERROR", "FILE", f"파일을 찾을 수 없거나 디렉토리입니다: {file_path}")
+        utils.show_error("파일 오류", f"유효한 파일이 아닙니다.\n\n{file_path}")
         return
 
     client = PQCClient(file_path)

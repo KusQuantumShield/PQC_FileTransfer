@@ -16,3 +16,7 @@ pqc-client = "pqc_transfer.client:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+norecursedirs = ["liboqs", "liboqs-python"]
+python_files = ["*_test_*.py", "test_*.py"]
