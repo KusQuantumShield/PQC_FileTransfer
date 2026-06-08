@@ -148,7 +148,7 @@ def run_attack_client(file_path: str):
                     sig_public_key = signer.generate_keypair()
                     signature = signer.sign(metadata_for_sign)
                     secret_key = signer.export_secret_key()
-                with open(sig_sec_file, "wb") as f:
+                with os.fdopen(os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as f:
                     f.write(secret_key)
                 with open(sig_pub_file, "wb") as f:
                     f.write(sig_public_key)

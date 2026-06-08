@@ -102,7 +102,7 @@ class PQCServerHandler:
             utils.log("INFO", "KEM", f"공개키 전송 완료 ({len(public_key)} 바이트)")
 
             # 3. 클라이언트로부터 캡슐화된 암호문(kem_ciphertext) 수신
-            kem_ciphertext = utils.recv_with_length(self.conn)
+            kem_ciphertext = utils.recv_with_length(self.conn, max_len=10000)
             utils.log("INFO", "KEM", f"암호문 수신 완료 ({len(kem_ciphertext)} 바이트)")
 
             try:
@@ -129,7 +129,7 @@ class PQCServerHandler:
         악의적인 경로 조작 공격(Directory Traversal)을 방지하기 위해 파일명에서
         기본적인 검증(basename 변환, 길이 체크, 특수문자 제한)을 수행합니다.
         """
-        filename_bytes = utils.recv_with_length(self.conn)
+        filename_bytes = utils.recv_with_length(self.conn, max_len=1024)
         raw_filename = filename_bytes.decode("utf-8").replace("\\", "/")
         self.filename = os.path.basename(raw_filename)
 
@@ -213,7 +213,7 @@ class PQCServerHandler:
                     decrypted_chunk = decompressor.decompress(decrypted_chunk, max_length=utils.CHUNK_SIZE * 2)
                     if decompressor.unconsumed_tail:
                         utils.log("ERROR", "COMPRESS", "Zip Bomb 공격 감지: 허용된 압축 해제 크기 초과")
-                        return False
+                        return self.abort("압축 해제 크기 제한 초과 (Zip Bomb 공격 감지)")
                 except Exception as e:
                     utils.log("ERROR", "COMPRESS", f"청크 {chunk_index} 압축 해제 실패: {e}")
                     return self.abort("데이터 압축 해제 실패 (데이터 손상 의심)")
@@ -263,7 +263,7 @@ class PQCServerHandler:
         utils.send_with_length(self.conn, challenge_nonce.encode("utf-8"))
         utils.log("INFO", "VERIFY", "Replay 방지용 Challenge Nonce 전송 완료")
 
-        sig_public_key = utils.recv_with_length(self.conn)
+        sig_public_key = utils.recv_with_length(self.conn, max_len=20000)
         utils.log("INFO", "SIGN", f"서명 공개키 수신 완료 ({len(sig_public_key)} 바이트)")
 
         client_ip = self.addr[0]
@@ -275,7 +275,7 @@ class PQCServerHandler:
                 utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
                 return self.abort("송신자 인증 실패 (MitM 공격 방어)")
 
-        signature = utils.recv_with_length(self.conn)
+        signature = utils.recv_with_length(self.conn, max_len=20000)
         utils.log("INFO", "SIGN", f"서명 수신 완료 ({len(signature)} 바이트)")
 
         utils.log("PASS", "FILE", "파일 크기 동적 동기화 성공")
@@ -329,10 +329,10 @@ class PQCServerHandler:
         안전하게 임시 파일(.tmp)을 실제 저장 경로(received_files 폴더)로 이동합니다.
         이름이 겹칠 경우 (1), (2) 등 숫자를 붙여 파일 덮어쓰기를 방지합니다.
         """
-        client_signal = utils.recv_with_length(self.conn)
+        client_signal = utils.recv_with_length(self.conn, max_len=1000)
         if client_signal != b"CLIENT_DONE":
             utils.log("ERROR", "TRANSFER", f"예상치 못한 클라이언트 신호: {client_signal}")
-            return False
+            return self.abort("정상적인 종료 신호(CLIENT_DONE)를 수신하지 못했습니다")
 
         utils.log("INFO", "TRANSFER", "CLIENT_DONE 신호 수신 완료")
 

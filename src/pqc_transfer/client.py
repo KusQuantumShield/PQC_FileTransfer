@@ -57,7 +57,7 @@ class PQCClient:
             except (ConnectionResetError, BrokenPipeError, ConnectionError):
                 try:
                     s.settimeout(1.0)
-                    err_bytes = utils.recv_with_length(s)
+                    err_bytes = utils.recv_with_length(s, max_len=1024)
                     err_msg = err_bytes.decode("utf-8")
                     if err_msg.startswith("ERROR:"):
                         utils.log("ERROR", "CLIENT", f"서버가 통신을 차단했습니다: {err_msg[6:]}")
@@ -245,7 +245,7 @@ class PQCClient:
         self.socket.sendall(self.file_hash.encode("utf-8"))
         
         # 서버로부터 Replay 방지용 Challenge Nonce 수신
-        challenge_nonce = utils.recv_with_length(self.socket).decode("utf-8")
+        challenge_nonce = utils.recv_with_length(self.socket, max_len=1024).decode("utf-8")
         if challenge_nonce.startswith("ERROR:"):
             raise ValueError(f"서버 거부: {challenge_nonce[6:]}")
         utils.log("INFO", "SIGN", "서버로부터 Replay 방지용 Challenge Nonce 수신 완료")
@@ -301,7 +301,7 @@ class PQCClient:
         utils.send_with_length(self.socket, b"CLIENT_DONE")
         utils.log("INFO", "TRANSFER", "CLIENT_DONE 신호 전송 완료")
         
-        response = utils.recv_with_length(self.socket).decode("utf-8")
+        response = utils.recv_with_length(self.socket, max_len=1024).decode("utf-8")
         if response.startswith("ERROR:"):
             raise ValueError(f"서버 거부: {response[6:]}")
         elif response == "SERVER_OK":
