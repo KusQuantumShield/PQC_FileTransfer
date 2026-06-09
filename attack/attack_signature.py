@@ -132,8 +132,10 @@ def run_attack_client(file_path: str):
             metadata_for_sign = f"{filename}|{sent_size}|{file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
             
             # PQC 전자서명(ML-DSA 등) 생성
-            sig_sec_file = os.path.join(os.path.dirname(__file__), "..", "client_sig_sec.bin")
-            sig_pub_file = os.path.join(os.path.dirname(__file__), "..", "client_sig_pub.bin")
+            key_dir = os.path.expanduser("~/.pqc_transfer_keys")
+            os.makedirs(key_dir, exist_ok=True)
+            sig_sec_file = os.path.join(key_dir, "client_sig_sec.bin")
+            sig_pub_file = os.path.join(key_dir, "client_sig_pub.bin")
             if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
                 with open(sig_sec_file, "rb") as f:
                     secret_key = f.read()
