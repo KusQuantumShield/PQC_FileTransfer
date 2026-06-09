@@ -54,10 +54,13 @@ class PQCClient:
                 self.create_and_send_signature()
                 self.finalize_transfer()
 
+            except ConnectionRefusedError:
+                utils.log("ERROR", "CLIENT", f"서버 {utils.SERVER_IP}:{utils.PORT} 에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.")
+                utils.show_error("연결 실패", "서버에 연결할 수 없습니다.\n서버가 실행 중인지 확인해 주세요.")
             except (ConnectionResetError, BrokenPipeError, ConnectionError):
                 try:
-                    s.settimeout(1.0)
-                    err_bytes = utils.recv_with_length(s, max_len=1024)
+                    self.socket.settimeout(1.0)
+                    err_bytes = utils.recv_with_length(self.socket, max_len=1024)
                     err_msg = err_bytes.decode("utf-8")
                     if err_msg.startswith("ERROR:"):
                         utils.log("ERROR", "CLIENT", f"서버가 통신을 차단했습니다: {err_msg[6:]}")
@@ -255,8 +258,10 @@ class PQCClient:
         metadata_for_sign = f"{self.filename}|{self.sent_size}|{self.file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
         sign_start_time = time.perf_counter()
-        sig_sec_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "client_sig_sec.bin"))
-        sig_pub_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "client_sig_pub.bin"))
+        key_dir = os.path.expanduser("~/.pqc_transfer_keys")
+        os.makedirs(key_dir, exist_ok=True)
+        sig_sec_file = os.path.join(key_dir, "client_sig_sec.bin")
+        sig_pub_file = os.path.join(key_dir, "client_sig_pub.bin")
         
         if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
             with open(sig_sec_file, "rb") as f:

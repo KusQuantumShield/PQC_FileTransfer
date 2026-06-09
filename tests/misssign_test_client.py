@@ -17,10 +17,7 @@ def test_misssign_test():
     utils.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {utils.SIG_ALG}")
     utils.log("INFO", "SYSTEM", f"청크(Chunk) 크기: {utils.CHUNK_SIZE} 바이트")
 
-    if len(sys.argv) > 1:
-        file_path = sys.argv[1]
-    else:
-        file_path = utils.select_file()
+    file_path = os.path.join(os.path.dirname(__file__), '../test.txt')
 
     if not file_path:
         utils.log("INFO", "FILE", "사용자가 파일 선택을 취소했습니다")
@@ -208,8 +205,10 @@ def test_misssign_test():
             metadata_for_sign = f"{filename}|{sent_size}|{file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
             sign_start_time = time.perf_counter()
-            sig_sec_file = os.path.join(os.path.dirname(__file__), "..", "client_sig_sec.bin")
-            sig_pub_file = os.path.join(os.path.dirname(__file__), "..", "client_sig_pub.bin")
+            key_dir = os.path.expanduser("~/.pqc_transfer_keys")
+            os.makedirs(key_dir, exist_ok=True)
+            sig_sec_file = os.path.join(key_dir, "client_sig_sec.bin")
+            sig_pub_file = os.path.join(key_dir, "client_sig_pub.bin")
             if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
                 with open(sig_sec_file, "rb") as f:
                     secret_key = f.read()
@@ -264,6 +263,9 @@ def test_misssign_test():
                 utils.log("PASS", "TRANSFER", "서버가 정상적으로 수신을 완료했습니다")
                 utils.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{filename}")
 
+        except ConnectionRefusedError:
+            utils.log("ERROR", "TEST", "서버에 연결할 수 없습니다. 테스트를 진행하려면 먼저 서버를 실행하세요.")
+            sys.exit(1)
         except (ConnectionResetError, BrokenPipeError, ConnectionError):
             try:
                 s.settimeout(1.0)
@@ -281,6 +283,7 @@ def test_misssign_test():
         except Exception as e:
             utils.log("ERROR", "CLIENT", str(e), exc_info=True)
             utils.show_error("전송 실패", str(e))
+            sys.exit(1)
 
 
 if __name__ == "__main__":
