@@ -89,7 +89,9 @@ python run_client.py
 
 - **해시 변조 공격:** `python attack/attack_hash.py`
 - **페이로드 변조 공격:** `python attack/attack_payload.py`
+- **서명 변조 공격:** `python attack/attack_signature.py`
 - **서명 무효화 테스트:** `python tests/misssign_test_client.py`
+- **키 교환 무효화 테스트:** `python tests/misskey_test_client.py`
 
 ### 4. 성능 벤치마크 (Benchmark)
 
@@ -97,6 +99,8 @@ python run_client.py
 
 - **기본 성능 측정 (터미널 출력):** `python benchmarks/benchmark.py`
 - **상세 성능 측정 (CSV 파일 저장 포함):** `python benchmarks/benchmark_perform.py`
+- **기존 RSA/ECC 성능 측정 (비교용):** `python benchmarks/benchmark_RSA.py`
+- **성능 비교 그래프 생성:** `python benchmarks/Compare_graph.py`
 
 ## 📝 로그 및 모니터링
 

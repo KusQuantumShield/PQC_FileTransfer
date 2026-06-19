@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 
 
 CSV_FILENAME = "benchmark_RSA.csv"
-ITERATIONS = 1000
+ITERATIONS = 100
 
 RSA_KEY_SIZE = 2048
 AES_SESSION_KEY_SIZE = 32
@@ -66,6 +66,8 @@ def save_results_to_csv(results, filename=CSV_FILENAME):
 def generate_rsa_keypair():
     """
     RSA private key와 public key를 생성합니다.
+    - 보안 강도를 위해 통상적으로 사용되는 공개 지수(public_exponent)인 65537을 사용합니다.
+    - 키 크기는 상단에 정의된 RSA_KEY_SIZE (예: 2048비트)를 적용합니다.
     """
     private_key = rsa.generate_private_key(
         public_exponent=65537,
@@ -80,6 +82,8 @@ def generate_rsa_keypair():
 def rsa_encrypt_session_key(public_key, session_key: bytes) -> bytes:
     """
     RSA public key로 AES session key를 암호화합니다.
+    - 패딩 방식으로는 보안성이 검증된 OAEP (Optimal Asymmetric Encryption Padding)를 사용합니다.
+    - MGF 및 기본 해시 알고리즘으로는 SHA256을 적용합니다.
     """
     encrypted_session_key = public_key.encrypt(
         session_key,
@@ -96,6 +100,8 @@ def rsa_encrypt_session_key(public_key, session_key: bytes) -> bytes:
 def rsa_decrypt_session_key(private_key, encrypted_session_key: bytes) -> bytes:
     """
     RSA private key로 암호화된 AES session key를 복호화합니다.
+    - 암호화 단계에서 사용했던 것과 동일한 OAEP 패딩 및 SHA256 해시 설정을 사용해야 
+      정상적으로 원본 세션 키가 복구됩니다.
     """
     decrypted_session_key = private_key.decrypt(
         encrypted_session_key,
@@ -112,6 +118,7 @@ def rsa_decrypt_session_key(private_key, encrypted_session_key: bytes) -> bytes:
 def get_public_key_size(public_key) -> int:
     """
     RSA public key를 DER 형식으로 변환한 뒤 크기를 측정합니다.
+    - 네트워크로 전송될 때 실제로 소비되는 공개키의 바이트(Bytes) 길이를 파악합니다.
     """
     public_key_der = public_key.public_bytes(
         encoding=serialization.Encoding.DER,
@@ -128,6 +135,7 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
     print(f"--- RSA 키 교환 성능 측정 ({RSA_KEY_SIZE}-bit, {iterations}회 반복) ---")
 
     # 1. RSA Keypair Generation
+    # 지정된 횟수만큼 키 쌍 생성을 반복하여 1회 생성에 걸리는 평균 소요 시간을 구합니다.
     start = time.perf_counter()
 
     for _ in range(iterations):
@@ -151,6 +159,7 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
     private_key, public_key = generate_rsa_keypair()
 
     # 2. AES Session Key Generation
+    # 실제 파일 암호화에 사용될 32바이트 크기(AES-256용)의 난수를 생성하는 시간을 측정합니다.
     start = time.perf_counter()
 
     for _ in range(iterations):
@@ -171,6 +180,7 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
     )
 
     # 3. RSA Encryption
+    # AES 세션 키를 RSA 공개키로 암호화(KEM의 캡슐화와 유사한 과정)하는 시간 측정입니다.
     session_key = os.urandom(AES_SESSION_KEY_SIZE)
 
     start = time.perf_counter()
@@ -193,6 +203,7 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
     )
 
     # 4. RSA Decryption
+    # 암호화된 AES 세션 키를 RSA 개인키로 복호화(KEM의 역캡슐화에 해당)하는 시간 측정입니다.
     encrypted_session_key = rsa_encrypt_session_key(public_key, session_key)
 
     start = time.perf_counter()
@@ -214,10 +225,13 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
         avg_time_ms=decrypt_ms
     )
 
+    # 복호화된 키가 원본과 동일한지 최종 무결성 검증
     if session_key != decrypted_session_key:
         raise RuntimeError("RSA session key mismatch")
 
-    total_ms = keygen_ms + session_key_gen_ms + encrypt_ms + decrypt_ms
+    # RSA는 통상적으로 장기 키(Long-term key)를 사용하므로, 매 연결마다 키를 생성하지 않습니다.
+    # 따라서 실제 키 교환(Key Exchange) 소요 시간은 (세션 키 생성 + 암호화 + 복호화)로 한정하는 것이 PQC(Ephemeral KEM)와 공정한 비교가 됩니다.
+    total_ms = session_key_gen_ms + encrypt_ms + decrypt_ms
     print(f"RSA 전체 키 교환 시간: {total_ms:.4f} ms/op")
 
     add_result(

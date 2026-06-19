@@ -9,13 +9,20 @@ from .logger import log
 
 def sha256_file(file_path: str) -> str:
     """
-    지정된 경로의 파일에 대해 SHA-256 해시를 계산
-    메모리 부족을 방지하기 위해 파일을 CHUNK_SIZE 단위로 나누어 점진적으로 읽고 해시를 업데이트
+    지정된 경로의 파일에 대해 SHA-256 해시를 계산하여 16진수 문자열로 반환합니다.
+    대용량 파일(예: 수 GB)을 한 번에 메모리에 올리면 MemoryError(OOM)가 발생할 수 있으므로,
+    CHUNK_SIZE(보통 1MB) 단위로 나누어 점진적으로 읽고 해시 상태를 업데이트합니다.
     """
+    # hashlib 라이브러리의 sha256 해시 객체 초기화
     h = hashlib.sha256()
+    # 파일을 바이너리 읽기 모드("rb")로 엽니다.
     with open(file_path, "rb") as f:
+        # 파일에서 CHUNK_SIZE 만큼 읽은 데이터를 chunk 변수에 할당하고,
+        # 해당 chunk가 비어있지 않은 동안(즉, 파일 끝에 도달할 때까지) 루프를 반복합니다.
         while chunk := f.read(CHUNK_SIZE):
+            # 읽어온 조각(chunk)을 해시 객체에 누적(update)합니다.
             h.update(chunk)
+    # 최종적으로 누적 계산된 해시값을 16진수 문자열 형식으로 반환합니다.
     return h.hexdigest()
 
 def _get_tk_root():

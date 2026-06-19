@@ -8,8 +8,9 @@ from pqc_transfer import utils
 
 def measure_kem_performance(iterations=1000):
     """
-    KEM (Key Encapsulation Mechanism) 성능을 측정합니다.
-    키 생성, 캡슐화, 역캡슐화 속도를 계산합니다.
+    KEM (Key Encapsulation Mechanism) 알고리즘의 3단계 주요 연산(키 생성, 캡슐화, 역캡슐화)에 대한
+    성능(소요 시간)을 측정합니다. PQC(양자 내성 암호)의 특징상 키 길이가 길고 연산 방식이 기존 RSA/ECC와 
+    다르므로, 이 벤치마크를 통해 병목 지점을 파악할 수 있습니다.
     """
     print(f"--- KEM 성능 측정 ({utils.KEM_ALG}, {iterations}회 반복) ---")
     
@@ -44,7 +45,8 @@ def measure_kem_performance(iterations=1000):
 def measure_dsa_performance(iterations=1000):
     """
     DSA (Digital Signature Algorithm) 성능을 측정합니다.
-    키 생성, 서명, 검증 속도를 계산합니다.
+    양자 내성 서명 알고리즘(예: ML-DSA)의 키 생성, 서명(Sign), 검증(Verify) 단계별
+    소요 시간을 측정하여, 서버/클라이언트 간 인증 과정에서 발생하는 오버헤드를 분석합니다.
     """
     print(f"--- DSA 성능 측정 ({utils.SIG_ALG}, {iterations}회 반복) ---")
     message = b"This is a test message for signature validation."
@@ -82,7 +84,8 @@ def measure_dsa_performance(iterations=1000):
 def measure_aes_performance(chunk_size=1024*1024, iterations=100):
     """
     AES-GCM 대칭키 암호화 성능을 측정합니다.
-    대용량 데이터(청크) 처리 시의 속도와 처리량(Throughput)을 계산합니다.
+    PQC 통신 이후 설정된 세션 키를 이용해 실제 대용량 데이터를 암/복호화할 때의 
+    처리 속도와 처리량(Throughput, MB/s 단위)을 계산합니다.
     """
     print(f"--- AES-GCM 성능 측정 (청크 크기: {chunk_size / 1024 / 1024:.1f} MB, {iterations}회 반복) ---")
     key = os.urandom(32)
@@ -109,7 +112,14 @@ def measure_aes_performance(chunk_size=1024*1024, iterations=100):
     print()
 
 if __name__ == "__main__":
+    # 벤치마크 프로그램 진입점 (단순 콘솔 출력 버전)
     print("양자 내성 암호(PQC) 및 대칭키 암호 성능 측정을 시작합니다...\n")
+    
+    # 1. KEM (Key Encapsulation Mechanism) - 키 쌍 생성, 캡슐화, 역캡슐화 성능 측정
     measure_kem_performance(1000)
+    
+    # 2. DSA (Digital Signature Algorithm) - 키 쌍 생성, 서명, 검증 성능 측정
     measure_dsa_performance(100)
+    
+    # 3. AES-GCM 대용량 청크 단위 암/복호화 성능 및 처리량 측정
     measure_aes_performance(utils.CHUNK_SIZE, 100)
