@@ -15,30 +15,44 @@ _client_sig_pk = None
 _client_sig_sk = None
 
 def get_client_sig_keys():
+    """
+    클라이언트의 서명용 공개키(Public Key) 및 비밀키(Secret Key) 쌍을 로드하거나 생성합니다.
+    매번 키를 생성하면 서버에서 인증(TOFU)할 수 없으므로 디스크에 안전하게 저장하고 재사용합니다.
+    
+    Returns:
+        tuple: (공개키 바이트열, 비밀키 바이트열)
+    """
     global _client_sig_pk, _client_sig_sk
+    # 이미 메모리에 키가 로드되어 있으면 바로 반환하여 성능 저하 방지
     if _client_sig_pk is not None:
         return _client_sig_pk, _client_sig_sk
         
+    # 사용자 홈 디렉토리 내에 키를 저장할 숨김 폴더 생성
     key_dir = os.path.expanduser("~/.pqc_transfer_keys")
     os.makedirs(key_dir, exist_ok=True)
+    
     sig_sec_file = os.path.join(key_dir, "client_sig_sec.bin")
     sig_pub_file = os.path.join(key_dir, "client_sig_pub.bin")
     
+    # 이미 생성된 서명 키 쌍이 존재할 경우 파일에서 로드
     if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
         with open(sig_sec_file, "rb") as f:
             _client_sig_sk = f.read()
         with open(sig_pub_file, "rb") as f:
             _client_sig_pk = f.read()
     else:
+        # 키 쌍이 존재하지 않으면 설정된 양자 내성 서명 알고리즘(예: ML-DSA)을 사용하여 새로 생성
         with oqs.Signature(utils.SIG_ALG) as signer:
             _client_sig_pk = signer.generate_keypair()
             _client_sig_sk = signer.export_secret_key()
             
         import stat
+        # 비밀키는 외부에 유출되면 안 되므로 소유자만 읽고 쓸 수 있도록 권한(chmod 600)을 엄격하게 제한하여 저장
         fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
         with os.fdopen(fd, "wb") as f:
             f.write(_client_sig_sk)
             
+        # 공개키는 누구나 읽어도 상관없으므로 일반적인 방식으로 저장
         with open(sig_pub_file, "wb") as f:
             f.write(_client_sig_pk)
             

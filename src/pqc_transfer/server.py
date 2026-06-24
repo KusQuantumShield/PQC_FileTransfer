@@ -30,34 +30,55 @@ _server_sig_pk = None
 _server_sig_sk = None
 
 def get_server_sig_keys():
+    """
+    서버의 서명용 공개키(Public Key) 및 비밀키(Secret Key) 쌍을 로드하거나 새로 생성합니다.
+    서버의 서명 키가 고정되어야 클라이언트가 TOFU(Trust On First Use) 방식으로 서버를 인증할 수 있습니다.
+    멀티스레딩 환경에서 키를 안전하게 한 번만 로드하도록 스레드 락(Lock)을 사용합니다.
+    
+    Returns:
+        tuple: (공개키 바이트열, 비밀키 바이트열)
+    """
     global _server_sig_pk, _server_sig_sk
+    
+    # 이미 메모리에 키가 로드되어 있으면 빠르게 반환
     if _server_sig_pk is not None:
         return _server_sig_pk, _server_sig_sk
         
+    # 다중 클라이언트 접속으로 인해 여러 스레드가 동시에 키를 초기화하려 하는 것을 방지하기 위해 락 획득
     with _server_sig_lock:
+        # 락 대기 중 다른 스레드에 의해 로드되었을 수 있으므로 이중 검사(Double-checked locking)
         if _server_sig_pk is not None:
             return _server_sig_pk, _server_sig_sk
             
+        # 사용자 홈 디렉토리 내에 키 저장소 폴더 경로 설정
         server_key_dir = os.path.expanduser("~/.pqc_transfer_keys")
         os.makedirs(server_key_dir, exist_ok=True)
+        
         sig_sec_file = os.path.join(server_key_dir, "server_sig_sec.bin")
         sig_pub_file = os.path.join(server_key_dir, "server_sig_pub.bin")
         
+        # 파일 시스템에 키가 이미 존재하는 경우 해당 파일을 읽어 로드
         if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
             with open(sig_sec_file, "rb") as f:
                 _server_sig_sk = f.read()
             with open(sig_pub_file, "rb") as f:
                 _server_sig_pk = f.read()
         else:
+            # 키 쌍이 없다면 양자 내성 서명 알고리즘(예: ML-DSA)을 사용하여 키 쌍을 새로 생성
             import stat
             with oqs.Signature(utils.SIG_ALG) as signer:
                 _server_sig_pk = signer.generate_keypair()
                 _server_sig_sk = signer.export_secret_key()
+            
+            # 비밀키는 민감한 정보이므로 현재 사용자만 읽고 쓸 수 있도록 파일 권한(chmod 600)을 엄격히 지정하여 저장
             fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
             with os.fdopen(fd, "wb") as f:
                 f.write(_server_sig_sk)
+            
+            # 공개키는 일반적인 파일 쓰기 모드로 저장
             with open(sig_pub_file, "wb") as f:
                 f.write(_server_sig_pk)
+                
         return _server_sig_pk, _server_sig_sk
 
 class PQCServerHandler:
