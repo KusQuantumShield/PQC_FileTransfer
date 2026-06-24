@@ -11,6 +11,39 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from . import utils
 
+_client_sig_pk = None
+_client_sig_sk = None
+
+def get_client_sig_keys():
+    global _client_sig_pk, _client_sig_sk
+    if _client_sig_pk is not None:
+        return _client_sig_pk, _client_sig_sk
+        
+    key_dir = os.path.expanduser("~/.pqc_transfer_keys")
+    os.makedirs(key_dir, exist_ok=True)
+    sig_sec_file = os.path.join(key_dir, "client_sig_sec.bin")
+    sig_pub_file = os.path.join(key_dir, "client_sig_pub.bin")
+    
+    if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
+        with open(sig_sec_file, "rb") as f:
+            _client_sig_sk = f.read()
+        with open(sig_pub_file, "rb") as f:
+            _client_sig_pk = f.read()
+    else:
+        with oqs.Signature(utils.SIG_ALG) as signer:
+            _client_sig_pk = signer.generate_keypair()
+            _client_sig_sk = signer.export_secret_key()
+            
+        import stat
+        fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+        with os.fdopen(fd, "wb") as f:
+            f.write(_client_sig_sk)
+            
+        with open(sig_pub_file, "wb") as f:
+            f.write(_client_sig_pk)
+            
+    return _client_sig_pk, _client_sig_sk
+
 class PQCClient:
     """
     서버와 파일 송수신을 담당하는 클라이언트 클래스
@@ -37,12 +70,24 @@ class PQCClient:
         self.sent_size = 0
         self.file_hash = None
 
+        import uuid
+        key_dir = os.path.expanduser("~/.pqc_transfer_keys")
+        os.makedirs(key_dir, exist_ok=True)
+        id_file = os.path.join(key_dir, "client_id.txt")
+        if os.path.exists(id_file):
+            with open(id_file, "r") as f:
+                self.client_id = f.read().strip()
+        else:
+            self.client_id = str(uuid.uuid4())
+            with open(id_file, "w") as f:
+                f.write(self.client_id)
+
     def transfer(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             self.socket = s
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
             
             try:
                 self.socket.connect((utils.SERVER_IP, utils.PORT))
@@ -96,7 +141,54 @@ class PQCClient:
 
         # 2. 서버의 KEM(키 캡슐화 메커니즘) 공개키 수신
         public_key = utils.recv_exact(self.socket, pk_len)
-        utils.log("INFO", "KEM", f"서버 공개키를 수신했습니다 ({len(public_key)} 바이트)")
+        
+        # [취약점 패치] 수신한 공개키의 길이가 KEM 알고리즘의 규격과 일치하는지 검증 (Buffer Over-read 방지)
+        with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
+            expected_pk_len = kem.details['length_public_key']
+        if len(public_key) != expected_pk_len:
+            utils.log("ERROR", "KEM", f"유효하지 않은 서버 공개키 길이: {len(public_key)} (예상: {expected_pk_len})")
+            raise ValueError(f"유효하지 않은 서버 공개키 길이 (크래시 방어)")
+            
+        # [보안 수정] 서버 인증을 위해 정적 KEM 키를 고정(TOFU)하는 로직은 전방향 안전성(Forward Secrecy)을 훼손합니다.
+        # 서버는 매번 임시(Ephemeral) 키쌍을 사용해야 하며, 서버의 인증은 서명을 통해 수행하는 것이 올바른 PQC 설계입니다.
+        
+        # [보안 추가] 서버가 전송한 임시 KEM 공개키에 대한 서명과 서명 공개키를 수신하여 검증 (MitM 완벽 방어)
+        server_sig_pk = utils.recv_with_length(self.socket, max_len=20000)
+        server_signature = utils.recv_with_length(self.socket, max_len=20000)
+        
+        with oqs.Signature(utils.SIG_ALG) as verifier:
+            expected_sig_pk_len = verifier.details['length_public_key']
+            expected_sig_len = verifier.details['length_signature']
+            
+        if len(server_sig_pk) != expected_sig_pk_len:
+            utils.log("ERROR", "SIGN", f"유효하지 않은 서버 서명 공개키 길이: {len(server_sig_pk)}")
+            raise ValueError("유효하지 않은 서버 서명 공개키 길이 (크래시 방어)")
+            
+        if len(server_signature) != expected_sig_len:
+            utils.log("ERROR", "SIGN", f"유효하지 않은 서버 서명 길이: {len(server_signature)}")
+            raise ValueError("유효하지 않은 서버 서명 길이 (크래시 방어)")
+
+        with oqs.Signature(utils.SIG_ALG) as verifier:
+            if not verifier.verify(public_key, server_signature, server_sig_pk):
+                utils.log("FAIL", "SIGN", "서버 서명 검증 실패: 임시 KEM 공개키가 변조되었습니다! (MitM 공격 의심)")
+                raise ConnectionError("서버 서명 검증 실패 (MitM 공격 의심)")
+        utils.log("PASS", "SIGN", "서버 서명 검증 성공 (KEM 공개키 무결성 확인)")
+
+        # 서버 서명 공개키에 대한 TOFU 로직 (서버 고정 신원 확인)
+        server_id_dir = os.path.expanduser("~/.pqc_transfer_keys")
+        trusted_server_file = os.path.join(server_id_dir, f"trusted_server_sig_{utils.SERVER_IP}.bin")
+        
+        if os.path.exists(trusted_server_file):
+            with open(trusted_server_file, "rb") as f:
+                trusted_pub = f.read()
+            if trusted_pub != server_sig_pk:
+                utils.log("FAIL", "VERIFY", "서버 인증 실패: 서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
+                raise ConnectionError("서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
+            # TOFU 갱신 (LRU는 클라이언트 쪽이므로 생략)
+        else:
+            with open(trusted_server_file, "wb") as f:
+                f.write(server_sig_pk)
+            utils.log("INFO", "VERIFY", "새로운 서버의 서명 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
 
         # 3. 양자 내성 암호(PQC) 기반 KEM을 사용하여 공유 비밀키(shared_secret)와 암호문(kem_ciphertext) 생성
         with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
@@ -122,6 +214,10 @@ class PQCClient:
         """
         utils.log("INFO", "FILE", f"선택된 파일: {self.filename}")
         utils.log("INFO", "FILE", f"파일 크기: {self.filesize} 바이트")
+
+        # 클라이언트 고유 식별자 전송 (NAT 방어 패치)
+        client_id_bytes = self.client_id.encode("utf-8")
+        utils.send_with_length(self.socket, client_id_bytes)
 
         # 파일명을 UTF-8로 인코딩하여 전송합니다.
         filename_bytes = self.filename.encode("utf-8")
@@ -163,6 +259,9 @@ class PQCClient:
         transfer_start_time = time.perf_counter()
         # 모든 청크에서 공통으로 사용할 4바이트 난수 접미사를 생성합니다.
         base_nonce_suffix = os.urandom(4)
+        
+        # 최적화: 매 루프마다 포맷 문자열 파싱을 피하기 위해 struct를 사전 컴파일
+        header_struct = struct.Struct("!BQI")
 
         # 불필요한 메모리 복사를 방지하기 위해 고정 크기(CHUNK_SIZE)의 바이트 배열을 생성합니다.
         buffer = bytearray(utils.CHUNK_SIZE)
@@ -178,23 +277,22 @@ class PQCClient:
                     # Zlib의 버퍼에 남아있는 모든 데이터를 밀어내어(flush) 암호화할 마지막 조각을 만듭니다.
                     chunk_data = compressor.flush(zlib.Z_FINISH) if use_compression else b""
                     
-                    # Nonce 구성: 8바이트 순차 청크 인덱스 + 4바이트 고정 난수 접미사 = 총 12바이트
-                    nonce = struct.pack("!Q", chunk_index) + base_nonce_suffix
+                    # 최적화: struct.pack 대신 to_bytes 사용
+                    nonce = chunk_index.to_bytes(8, 'big') + base_nonce_suffix
                     # AES-GCM 인증 태그 크기(16바이트)를 포함하여 임시 페이로드 길이 계산
                     temp_payload_len = len(nonce) + len(chunk_data) + 16
                     # Associated Data(AAD)로 사용하기 위한 13바이트 헤더 조립 (플래그 1B + 인덱스 8B + 길이 4B)
-                    header = struct.pack("!BQI", flags, chunk_index, temp_payload_len)
+                    header = header_struct.pack(flags, chunk_index, temp_payload_len)
                     
                     # 데이터를 AES-GCM으로 암호화합니다. 헤더를 AAD로 제공하여 헤더 변조도 감지할 수 있게 합니다.
                     encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
                     # 실제 암호문 생성 후, Nonce 길이를 포함하여 최종 페이로드 길이를 계산합니다.
                     payload_len = len(nonce) + len(encrypted_chunk)
                     # 최종 계산된 페이로드 길이로 헤더를 다시 구성합니다.
-                    header = struct.pack("!BQI", flags, chunk_index, payload_len)
+                    header = header_struct.pack(flags, chunk_index, payload_len)
                     
                     # 헤더, Nonce, 암호화된 청크 데이터를 순차적으로 소켓을 통해 전송합니다.
-                    self.socket.sendall(header + nonce)
-                    self.socket.sendall(encrypted_chunk)
+                    self.socket.sendall(header + nonce + encrypted_chunk)
                     break # 마지막 청크 전송을 마치고 무한 루프 종료
                     
                 # 버퍼 전체가 아닌 실제로 읽은 바이트만큼만 잘라내는 memoryview (메모리 복사 없음)
@@ -209,21 +307,21 @@ class PQCClient:
                 else:
                     chunk_data = chunk_view
 
-                # Nonce 구성 (인덱스 + 접미사)
-                nonce = struct.pack("!Q", chunk_index) + base_nonce_suffix
-                # 헤더 구성을 위한 임시 페이로드 길이 계산
-                temp_payload_len = len(nonce) + len(chunk_data) + 16
-                header = struct.pack("!BQI", flags, chunk_index, temp_payload_len)
+                # 최적화: struct.pack 대신 to_bytes 사용
+                nonce = chunk_index.to_bytes(8, 'big') + base_nonce_suffix
+                # [청크 헤더 구조: 총 13바이트]
+                # 취약점 패치: 헤더를 인증 데이터(AAD)로 사용하기 위해 임시 길이로 먼저 패킹
+                temp_payload_len = len(nonce) + len(chunk_data) + 16 # tag(16)
+                header = header_struct.pack(flags, chunk_index, temp_payload_len)
                 
                 # 데이터 암호화 (무결성 및 기밀성 확보)
                 encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
                 # 최종 페이로드 길이 도출 및 헤더 재구성
                 payload_len = len(nonce) + len(encrypted_chunk)
-                header = struct.pack("!BQI", flags, chunk_index, payload_len)
+                header = header_struct.pack(flags, chunk_index, payload_len)
                 
                 # 네트워크로 전송
-                self.socket.sendall(header + nonce)
-                self.socket.sendall(encrypted_chunk)
+                self.socket.sendall(header + nonce + encrypted_chunk)
                 
                 # 전체 진행 상황을 누적 집계하여 출력
                 self.sent_size += bytes_read
@@ -253,37 +351,18 @@ class PQCClient:
             raise ValueError(f"서버 거부: {challenge_nonce[6:]}")
         utils.log("INFO", "SIGN", "서버로부터 Replay 방지용 Challenge Nonce 수신 완료")
         
-        # 2. 서명할 메타데이터 구성: 파일명|수신크기|해시값|세션키해시|챌린지논스
+        # 무결성 검증을 위한 서명 데이터 조합 (Canonicalization 취약점 방지를 위해 구분자 사용)
         session_key_hash = utils.hash_ss(self.session_key)
-        metadata_for_sign = f"{self.filename}|{self.sent_size}|{self.file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
+        metadata_for_sign = f"{self.client_id}|{self.filename}|{self.sent_size}|{self.file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
         sign_start_time = time.perf_counter()
-        key_dir = os.path.expanduser("~/.pqc_transfer_keys")
-        os.makedirs(key_dir, exist_ok=True)
-        sig_sec_file = os.path.join(key_dir, "client_sig_sec.bin")
-        sig_pub_file = os.path.join(key_dir, "client_sig_pub.bin")
         
-        if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
-            with open(sig_sec_file, "rb") as f:
-                secret_key = f.read()
-            with open(sig_pub_file, "rb") as f:
-                sig_public_key = f.read()
-            with oqs.Signature(utils.SIG_ALG, secret_key=secret_key) as signer:
-                signature = signer.sign(metadata_for_sign)
-        else:
-            with oqs.Signature(utils.SIG_ALG) as signer:
-                sig_public_key = signer.generate_keypair()
-                signature = signer.sign(metadata_for_sign)
-                secret_key = signer.export_secret_key()
-                
-            # [보안 패치] 개인키 파일은 소유자만 읽고 쓸 수 있도록(0o600) 안전하게 생성
-            import stat
-            fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
-            with os.fdopen(fd, "wb") as f:
-                f.write(secret_key)
-                
-            with open(sig_pub_file, "wb") as f:
-                f.write(sig_public_key)
+        # 클라이언트 서명 키를 메모리에 캐싱된 함수를 통해 로드 (디스크 I/O 최적화)
+        sig_public_key, secret_key = get_client_sig_keys()
+        
+        with oqs.Signature(utils.SIG_ALG, secret_key=secret_key) as signer:
+            signature = signer.sign(metadata_for_sign)
+            
         sign_end_time = time.perf_counter()
 
         utils.log("PASS", "SIGN", f"ML-DSA 서명 생성 완료 (소요 시간: {sign_end_time - sign_start_time:.4f} 초)")

@@ -5,7 +5,7 @@ import hashlib
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox
-    HAS_TKINTER = True
+    HAS_TKINTER = "PYTEST_CURRENT_TEST" not in os.environ # 자동화 테스트 멈춤 현상을 방지하기 위해 테스트 중에는 GUI 팝업 비활성화
 except ImportError:
     HAS_TKINTER = False
 
@@ -20,13 +20,17 @@ def sha256_file(file_path: str) -> str:
     """
     # hashlib 라이브러리의 sha256 해시 객체 초기화
     h = hashlib.sha256()
+    # 메모리 복사본 생성을 방지하기 위해 고정 크기(CHUNK_SIZE) 버퍼와 memoryview 활용 (Zero-copy 최적화)
+    buffer = bytearray(CHUNK_SIZE)
+    view = memoryview(buffer)
     # 파일을 바이너리 읽기 모드("rb")로 엽니다.
     with open(file_path, "rb") as f:
-        # 파일에서 CHUNK_SIZE 만큼 읽은 데이터를 chunk 변수에 할당하고,
-        # 해당 chunk가 비어있지 않은 동안(즉, 파일 끝에 도달할 때까지) 루프를 반복합니다.
-        while chunk := f.read(CHUNK_SIZE):
-            # 읽어온 조각(chunk)을 해시 객체에 누적(update)합니다.
-            h.update(chunk)
+        while True:
+            bytes_read = f.readinto(buffer)
+            if not bytes_read:
+                break
+            # 읽어온 실제 조각만큼만 memoryview로 슬라이싱하여 해시 누적(update)
+            h.update(view[:bytes_read])
     # 최종적으로 누적 계산된 해시값을 16진수 문자열 형식으로 반환합니다.
     return h.hexdigest()
 

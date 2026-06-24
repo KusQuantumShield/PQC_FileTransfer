@@ -24,9 +24,8 @@ def test_misssign_test():
         return
 
     if not os.path.exists(file_path):
-        utils.log("ERROR", "FILE", f"파일을 찾을 수 없습니다: {file_path}")
-        utils.show_error("파일 오류", f"파일을 찾을 수 없습니다.\n\n{file_path}")
-        return
+        with open(file_path, "w") as f:
+            f.write("This is a dummy test file for testing.")
 
     # TCP IPv4 소켓 생성
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -54,6 +53,8 @@ def test_misssign_test():
                 raise ValueError("Invalid public key length")
 
             public_key = utils.recv_exact(s, pk_len)
+            _ = utils.recv_with_length(s, max_len=20000)
+            _ = utils.recv_with_length(s, max_len=20000)
             utils.log("INFO", "KEM", f"서버 공개키를 수신했습니다 ({len(public_key)} 바이트)")
 
             # KEM 알고리즘을 사용하여 서버의 공개키로 공유 비밀키를 캡슐화
@@ -76,6 +77,9 @@ def test_misssign_test():
             # =========================================================
             # [단계 2] 전송할 파일의 초기 메타데이터 전송
             # =========================================================
+            client_id = "test_script_id2"
+            utils.send_with_length(s, client_id.encode("utf-8"))
+
             filename = os.path.basename(file_path)
             filename_bytes = filename.encode("utf-8")
             filesize = os.path.getsize(file_path)
@@ -202,7 +206,7 @@ def test_misssign_test():
             
             # 무결성 검증을 위한 서명 데이터 조합 (Canonicalization 취약점 방지를 위해 구분자 사용)
             session_key_hash = utils.hash_ss(session_key)
-            metadata_for_sign = f"{filename}|{sent_size}|{file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
+            metadata_for_sign = f"{client_id}|{filename}|{sent_size}|{file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
             sign_start_time = time.perf_counter()
             key_dir = os.path.expanduser("~/.pqc_transfer_keys")
@@ -262,6 +266,7 @@ def test_misssign_test():
             elif response == "SERVER_OK":
                 utils.log("PASS", "TRANSFER", "서버가 정상적으로 수신을 완료했습니다")
                 utils.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{filename}")
+                assert False, "취약점 발견: 서버가 변조된 서명을 정상으로 판정했습니다!"
 
         except ConnectionRefusedError:
             utils.log("ERROR", "TEST", "서버에 연결할 수 없습니다. 테스트를 진행하려면 먼저 서버를 실행하세요.")

@@ -10,15 +10,19 @@ def recv_exact_into(sock: socket.socket, view: memoryview, length: int) -> None:
     대용량 청크 데이터를 빠르게 수신할 때 메모리 효율과 속도가 매우 높습니다.
     """
     pos = 0
-    start_time = time.time()
+    start_time = time.monotonic()
+    loop_count = 0
     while pos < length:
         packet_len = sock.recv_into(view[pos:length])
         if not packet_len:
             raise ConnectionError("네트워크 연결이 예기치 않게 종료되었습니다.")
         pos += packet_len
+        loop_count += 1
         # Slowloris 방어: 단일 청크 수신에 30초 이상 걸리면 강제 차단
-        if time.time() - start_time > 30.0:
-            raise TimeoutError("데이터 수신 속도가 너무 느립니다 (Slowloris 방어).")
+        # 최적화: 매 루프마다 시간 확인을 하지 않고 64번마다 확인하여 syscall 오버헤드 감소
+        if loop_count & 63 == 0:
+            if time.monotonic() - start_time > 30.0:
+                raise TimeoutError("데이터 수신 속도가 너무 느립니다 (Slowloris 방어).")
 
 def recv_exact(sock: socket.socket, length: int) -> bytes:
     """
@@ -27,15 +31,18 @@ def recv_exact(sock: socket.socket, length: int) -> bytes:
     buf = bytearray(length)
     view = memoryview(buf)
     pos = 0
-    start_time = time.time()
+    start_time = time.monotonic()
+    loop_count = 0
     while pos < length:
         packet_len = sock.recv_into(view[pos:])
         if not packet_len:
             raise ConnectionError("네트워크 연결이 예기치 않게 종료되었습니다.")
         pos += packet_len
-        # Slowloris 방어: 단일 청크 수신에 30초 이상 걸리면 강제 차단
-        if time.time() - start_time > 30.0:
-            raise TimeoutError("데이터 수신 속도가 너무 느립니다 (Slowloris 방어).")
+        loop_count += 1
+        # Slowloris 방어 및 최적화
+        if loop_count & 63 == 0:
+            if time.monotonic() - start_time > 30.0:
+                raise TimeoutError("데이터 수신 속도가 너무 느립니다 (Slowloris 방어).")
     
     return bytes(buf)
 

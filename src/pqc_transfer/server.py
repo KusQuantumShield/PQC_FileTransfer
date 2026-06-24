@@ -25,6 +25,41 @@ _file_save_lock = threading.Lock()
 # TOFU(Trust On First Use) 신뢰 목록 동시 접근 제어를 위한 전역 락
 _tofu_lock = threading.Lock()
 
+_server_sig_lock = threading.Lock()
+_server_sig_pk = None
+_server_sig_sk = None
+
+def get_server_sig_keys():
+    global _server_sig_pk, _server_sig_sk
+    if _server_sig_pk is not None:
+        return _server_sig_pk, _server_sig_sk
+        
+    with _server_sig_lock:
+        if _server_sig_pk is not None:
+            return _server_sig_pk, _server_sig_sk
+            
+        server_key_dir = os.path.expanduser("~/.pqc_transfer_keys")
+        os.makedirs(server_key_dir, exist_ok=True)
+        sig_sec_file = os.path.join(server_key_dir, "server_sig_sec.bin")
+        sig_pub_file = os.path.join(server_key_dir, "server_sig_pub.bin")
+        
+        if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
+            with open(sig_sec_file, "rb") as f:
+                _server_sig_sk = f.read()
+            with open(sig_pub_file, "rb") as f:
+                _server_sig_pk = f.read()
+        else:
+            import stat
+            with oqs.Signature(utils.SIG_ALG) as signer:
+                _server_sig_pk = signer.generate_keypair()
+                _server_sig_sk = signer.export_secret_key()
+            fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+            with os.fdopen(fd, "wb") as f:
+                f.write(_server_sig_sk)
+            with open(sig_pub_file, "wb") as f:
+                f.write(_server_sig_pk)
+        return _server_sig_pk, _server_sig_sk
+
 class PQCServerHandler:
     """
     클라이언트 연결을 1:1로 처리하는 서버 프로토콜 핸들러
@@ -92,17 +127,33 @@ class PQCServerHandler:
     def perform_handshake(self) -> bool:
         """[단계 1] 핸드셰이크: KEM 키 생성 및 교환"""
         kem_start_time = time.perf_counter()
-        # 1. 양자 내성 암호(PQC) 기반 KEM 알고리즘(예: ML-KEM) 키쌍 생성
+        
+        # [보안 수정] 서버 인증 부재를 이유로 정적 KEM 키쌍을 사용하면 KEM의 핵심인 전방향 안전성(Forward Secrecy)이 훼손됩니다.
+        # KEM은 일회성(Ephemeral)으로 사용해야 하며, 서버 인증은 서명(Signature)을 통해 이루어져야 합니다.
         with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
             public_key = kem.generate_keypair()
-            utils.log("INFO", "KEM", "ML-KEM 키쌍 생성 완료")
+            utils.log("INFO", "KEM", "ML-KEM 임시(Ephemeral) 키쌍 생성 완료")
 
-            # 2. 클라이언트에게 서버의 공개키 전송
+            # [보안 추가] 서버의 정적 서명 키를 로드하거나 생성하여 KEM 공개키에 서명 (MitM 완벽 방어)
+            server_sig_pk, server_sig_sk = get_server_sig_keys()
+
+            with oqs.Signature(utils.SIG_ALG, secret_key=server_sig_sk) as signer:
+                server_signature = signer.sign(public_key)
+
+            # 2. 클라이언트에게 서버의 공개키 및 서명 전송
             utils.send_with_length(self.conn, public_key)
-            utils.log("INFO", "KEM", f"공개키 전송 완료 ({len(public_key)} 바이트)")
+            utils.send_with_length(self.conn, server_sig_pk)
+            utils.send_with_length(self.conn, server_signature)
+            utils.log("INFO", "SIGN", "임시 KEM 공개키에 서명하여 클라이언트에게 전송 완료 (서버 인증)")
 
-            # 3. 클라이언트로부터 캡슐화된 암호문(kem_ciphertext) 수신
+            # 3. 클라이언트로부터 KEM 암호문 수신 (공유 비밀키 도출용)
             kem_ciphertext = utils.recv_with_length(self.conn, max_len=10000)
+            
+            # [취약점 패치] 수신한 KEM 암호문의 길이가 정확한지 검증하여 Buffer Over-read(메모리 누수 및 크래시) 방지
+            if len(kem_ciphertext) != kem.details['length_ciphertext']:
+                utils.log("ERROR", "KEM", f"유효하지 않은 KEM 암호문 길이: {len(kem_ciphertext)}")
+                return self.abort("유효하지 않은 KEM 암호문 길이 (크래시 방어)")
+                
             utils.log("INFO", "KEM", f"암호문 수신 완료 ({len(kem_ciphertext)} 바이트)")
 
             try:
@@ -129,6 +180,11 @@ class PQCServerHandler:
         악의적인 경로 조작 공격(Directory Traversal)을 방지하기 위해 파일명에서
         기본적인 검증(basename 변환, 길이 체크, 특수문자 제한)을 수행합니다.
         """
+        # 0. 클라이언트 고유 식별자 수신 (NAT 환경 다중 접속 지원)
+        client_id_bytes = utils.recv_with_length(self.conn, max_len=1024)
+        self.client_id = client_id_bytes.decode("utf-8")
+
+        # 1. 파일명 수신 (가변 길이 문자열이므로 먼저 길이를 받고 이후 데이터를 받음)
         filename_bytes = utils.recv_with_length(self.conn, max_len=1024)
         raw_filename = filename_bytes.decode("utf-8").replace("\\", "/")
         self.filename = os.path.basename(raw_filename)
@@ -172,12 +228,13 @@ class PQCServerHandler:
 
         expected_chunk_index = 0
         transfer_start_time = time.perf_counter()
+        header_struct = struct.Struct("!BQI")
 
         while True:
             # 1. 13바이트 고정 길이의 헤더를 수신합니다. (1바이트 플래그, 8바이트 인덱스, 4바이트 페이로드 길이)
             header = utils.recv_exact(self.conn, 13)
-            # 수신된 바이너리 헤더 데이터를 파이썬 변수로 언패킹합니다. (!는 네트워크 바이트 순서를 의미)
-            flags, chunk_index, payload_len = struct.unpack("!BQI", header)
+            # 수신한 헤더 바이너리를 파이썬 변수로 언패킹합니다. (플래그 1B, 인덱스 8B, 페이로드 길이 4B)
+            flags, chunk_index, payload_len = header_struct.unpack(header)
 
             # 공격자가 청크 순서를 조작하거나 누락시키는 재전송(Replay)/순서 조작 공격을 방지하기 위한 검증입니다.
             if chunk_index != expected_chunk_index:
@@ -193,7 +250,8 @@ class PQCServerHandler:
             utils.recv_exact_into(self.conn, recv_view, payload_len)
             
             # 페이로드 분리: 앞의 12바이트는 AES-GCM 복호화에 필요한 Nonce(난수), 나머지는 실제 암호화된 데이터입니다.
-            nonce = bytes(recv_view[:12])
+            # 최적화: bytes() 복사를 제거하고 memoryview를 그대로 전달 (Zero-copy)
+            nonce = recv_view[:12]
             encrypted_chunk = recv_view[12:payload_len]
 
             try:
@@ -264,18 +322,56 @@ class PQCServerHandler:
         utils.log("INFO", "VERIFY", "Replay 방지용 Challenge Nonce 전송 완료")
 
         sig_public_key = utils.recv_with_length(self.conn, max_len=20000)
+        
+        # [취약점 패치] 수신한 서명 공개키의 길이가 정확한지 검증 (Buffer Over-read 크래시 방지)
+        with oqs.Signature(utils.SIG_ALG) as temp_verifier:
+            expected_sig_pk_len = temp_verifier.details['length_public_key']
+            expected_sig_len = temp_verifier.details['length_signature']
+            
+        if len(sig_public_key) != expected_sig_pk_len:
+            utils.log("ERROR", "SIGN", f"유효하지 않은 서명 공개키 길이: {len(sig_public_key)}")
+            return self.abort("유효하지 않은 서명 공개키 길이 (크래시 방어)")
+            
         utils.log("INFO", "SIGN", f"서명 공개키 수신 완료 ({len(sig_public_key)} 바이트)")
 
-        client_ip = self.addr[0]
+        # TOFU(Trust On First Use) 기반 최초 접속 공개키 신뢰 및 검증
+        client_id_dir = os.path.expanduser("~/.pqc_transfer_keys")
+        os.makedirs(client_id_dir, exist_ok=True)
+        # 보안 패치: 디렉토리 순회 공격 방지를 위해 client_id 검증 (알파벳, 숫자, 하이픈, 언더스코어만 허용)
+        import re
+        if not re.match(r'^[\w-]+$', self.client_id):
+            utils.log("FAIL", "VERIFY", "유효하지 않은 클라이언트 ID 포맷입니다.")
+            return self.abort("유효하지 않은 클라이언트 ID 포맷")
+        
+        trusted_client_file = os.path.join(client_id_dir, f"trusted_client_sig_{self.client_id}.bin")
+
         with _tofu_lock:
-            if client_ip not in TRUSTED_KEYS:
-                TRUSTED_KEYS[client_ip] = sig_public_key
-                utils.log("INFO", "VERIFY", "새로운 클라이언트 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
-            elif TRUSTED_KEYS[client_ip] != sig_public_key:
-                utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
-                return self.abort("송신자 인증 실패 (MitM 공격 방어)")
+            if self.client_id in TRUSTED_KEYS:
+                trusted_pub = TRUSTED_KEYS[self.client_id]
+                if trusted_pub != sig_public_key:
+                    utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
+                    return self.abort("송신자 인증 실패 (MitM 공격 방어)")
+            else:
+                if os.path.exists(trusted_client_file):
+                    with open(trusted_client_file, "rb") as f:
+                        trusted_pub = f.read()
+                    if trusted_pub != sig_public_key:
+                        utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
+                        return self.abort("송신자 인증 실패 (MitM 공격 방어)")
+                    TRUSTED_KEYS[self.client_id] = trusted_pub
+                else:
+                    with open(trusted_client_file, "wb") as f:
+                        f.write(sig_public_key)
+                    TRUSTED_KEYS[self.client_id] = sig_public_key
+                    utils.log("INFO", "VERIFY", f"새로운 클라이언트({self.client_id[:8]}) 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
 
         signature = utils.recv_with_length(self.conn, max_len=20000)
+        
+        # [취약점 패치] 수신한 서명 데이터의 길이가 정확한지 검증 (Buffer Over-read 크래시 방지)
+        if len(signature) != expected_sig_len:
+            utils.log("ERROR", "SIGN", f"유효하지 않은 서명 길이: {len(signature)}")
+            return self.abort("유효하지 않은 서명 길이 (크래시 방어)")
+            
         utils.log("INFO", "SIGN", f"서명 수신 완료 ({len(signature)} 바이트)")
 
         utils.log("PASS", "FILE", "파일 크기 동적 동기화 성공")
@@ -296,8 +392,9 @@ class PQCServerHandler:
         utils.log("INFO", "HASH", f"계산된 SHA-256: {received_hash}")
 
         # 무결성 검증을 위한 서명 데이터 조합 (MitM 세션 바인딩 및 Replay 방지 난수 포함)
+        # [보안 수정] 서명 데이터에 송신자의 고유 식별자(client_id)를 포함시켜 Identity Misbinding(릴레이 공격) 방어
         session_key_hash = utils.hash_ss(self.session_key)
-        metadata_for_verify = f"{self.filename}|{self.received_size}|{received_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
+        metadata_for_verify = f"{self.client_id}|{self.filename}|{self.received_size}|{received_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
         try:
             sign_verify_start_time = time.perf_counter()
@@ -350,6 +447,10 @@ class PQCServerHandler:
                 save_path = os.path.join(target_dir, f"{base_name}({counter}){ext}")
                 counter += 1
                 
+            # 파일 이동 전에 열려있는 파일 핸들을 명시적으로 닫아줍니다 (Windows OS 등에서 PermissionError 발생 방지)
+            if hasattr(self, 'temp_file') and self.temp_file and not self.temp_file.closed:
+                self.temp_file.close()
+                
             shutil.move(self.temp_path, save_path)
             self.temp_path = None
 
@@ -362,15 +463,22 @@ class PQCServerHandler:
 
     def cleanup(self):
         """
-        소켓 자원 및 임시 파일을 안전하게 정리합니다.
-        전송 중 오류가 발생했거나, 연결이 종료된 경우 남아있는 시스템 자원(파일, 네트워크 연결 등)을 해제합니다.
+        소켓 연결을 종료하고, 파일 전송이 비정상적으로 종료되었을 경우
+        남아있는 임시 파일을 안전하게 삭제하여 디스크 용량 누수를 방지합니다.
         """
-        try:
-            if self.temp_file and not self.temp_file.closed:
+        if self.conn:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+        
+        # [취약점 패치] 임시 파일의 파일 디스크립터를 명시적으로 닫아 FD 고갈 및 Windows PermissionError 방지
+        if hasattr(self, 'temp_file') and self.temp_file and not self.temp_file.closed:
+            try:
                 self.temp_file.close()
-        except Exception:
-            pass
-            
+            except Exception:
+                pass
+
         if self.temp_path and os.path.exists(self.temp_path):
             try:
                 os.remove(self.temp_path)
@@ -403,8 +511,8 @@ def main():
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
         s.bind((utils.HOST, utils.PORT))
         s.listen(10)  # 다중 접속을 위해 백로그 증가
         
@@ -422,8 +530,8 @@ def main():
                     continue
                 
                 conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
-                conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
                 conn.settimeout(15.0)
                 
                 handler = PQCServerHandler(conn, addr)

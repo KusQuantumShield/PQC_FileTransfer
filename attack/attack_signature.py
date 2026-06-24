@@ -38,6 +38,9 @@ def run_attack_client(file_path: str):
             pk_len_bytes = utils.recv_exact(s, 4)
             pk_len = struct.unpack("!I", pk_len_bytes)[0]
             public_key = utils.recv_exact(s, pk_len)
+            _ = utils.recv_with_length(s, max_len=20000)
+            _ = utils.recv_with_length(s, max_len=20000)
+            utils.log("INFO", "KEM", f"서버 공개키를 수신했습니다 ({len(public_key)} 바이트)")
 
             # 2. 양자 내성 암호(PQC)를 사용하여 공유 비밀키와 암호문 생성
             with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
@@ -48,6 +51,9 @@ def run_attack_client(file_path: str):
             session_key = utils.derive_key(shared_secret)
 
             # 4. 파일 메타데이터(파일명, 크기) 전송
+            client_id = "attack_script_id"
+            utils.send_with_length(s, client_id.encode("utf-8"))
+
             filename = os.path.basename(file_path)
             filename_bytes = filename.encode("utf-8")
             filesize = os.path.getsize(file_path)
@@ -129,7 +135,7 @@ def run_attack_client(file_path: str):
             
             # 7. 서명할 메타데이터 구성 (원본 해시 사용)
             session_key_hash = utils.hash_ss(session_key)
-            metadata_for_sign = f"{filename}|{sent_size}|{file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
+            metadata_for_sign = f"{client_id}|{filename}|{sent_size}|{file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
             
             # PQC 전자서명(ML-DSA 등) 생성
             key_dir = os.path.expanduser("~/.pqc_transfer_keys")
