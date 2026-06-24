@@ -129,7 +129,13 @@ def test_misssign_test():
             buffer = bytearray(utils.CHUNK_SIZE)
             with open(file_path, "rb") as f:
                 while True:
+                    # 버퍼 크기만큼 읽기
                     bytes_read = f.readinto(buffer)
+                    
+                    # 파일이 커지는 경우를 대비하여 원래 파일 크기로 제한
+                    if sent_size + bytes_read > filesize:
+                        bytes_read = filesize - sent_size
+
                     if bytes_read == 0:
                         # 3. 파일 끝에 도달 -> Z_FINISH 처리 및 명시적 EOF(0x02) 플래그를 담은 마지막 빈 청크 전송
                         flags = 0x03 if use_compression else 0x02 # 0x01 (압축) | 0x02 (EOF)

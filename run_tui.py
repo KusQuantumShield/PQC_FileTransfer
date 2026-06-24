@@ -18,14 +18,22 @@ class TUIApp:
         """
         self.stdscr = stdscr
         # 커서를 화면에서 숨김 처리하여 깔끔한 UI 제공
-        curses.curs_set(0)
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
         
         # UI 요소에 사용할 색상 조합 정의
-        curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN) # 선택된 메뉴 아이템 강조용
-        curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK) # 성공 또는 완료 로그용
-        curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)   # 에러 또는 실패 로그용
-        curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK) # 경고 메시지용
-        curses.init_pair(5, curses.COLOR_CYAN, curses.COLOR_BLACK) # 제목 및 헤더 텍스트용
+        if curses.has_colors():
+            try:
+                curses.use_default_colors()
+                curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN) # 선택된 메뉴 아이템 강조용
+                curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK) # 성공 또는 완료 로그용
+                curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)   # 에러 또는 실패 로그용
+                curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK) # 경고 메시지용
+                curses.init_pair(5, curses.COLOR_CYAN, curses.COLOR_BLACK) # 제목 및 헤더 텍스트용
+            except curses.error:
+                pass
 
         # 메인 화면에 표시될 메뉴 항목들
         self.menu_items = [
