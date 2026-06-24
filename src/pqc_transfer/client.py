@@ -11,52 +11,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from . import utils
 
-_client_sig_pk = None
-_client_sig_sk = None
 
-def get_client_sig_keys():
-    """
-    클라이언트의 서명용 공개키(Public Key) 및 비밀키(Secret Key) 쌍을 로드하거나 생성합니다.
-    매번 키를 생성하면 서버에서 인증(TOFU)할 수 없으므로 디스크에 안전하게 저장하고 재사용합니다.
-    
-    Returns:
-        tuple: (공개키 바이트열, 비밀키 바이트열)
-    """
-    global _client_sig_pk, _client_sig_sk
-    # 이미 메모리에 키가 로드되어 있으면 바로 반환하여 성능 저하 방지
-    if _client_sig_pk is not None:
-        return _client_sig_pk, _client_sig_sk
-        
-    # 사용자 홈 디렉토리 내에 키를 저장할 숨김 폴더 생성
-    key_dir = os.path.expanduser("~/.pqc_transfer_keys")
-    os.makedirs(key_dir, exist_ok=True)
-    
-    sig_sec_file = os.path.join(key_dir, "client_sig_sec.bin")
-    sig_pub_file = os.path.join(key_dir, "client_sig_pub.bin")
-    
-    # 이미 생성된 서명 키 쌍이 존재할 경우 파일에서 로드
-    if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
-        with open(sig_sec_file, "rb") as f:
-            _client_sig_sk = f.read()
-        with open(sig_pub_file, "rb") as f:
-            _client_sig_pk = f.read()
-    else:
-        # 키 쌍이 존재하지 않으면 설정된 양자 내성 서명 알고리즘(예: ML-DSA)을 사용하여 새로 생성
-        with oqs.Signature(utils.SIG_ALG) as signer:
-            _client_sig_pk = signer.generate_keypair()
-            _client_sig_sk = signer.export_secret_key()
-            
-        import stat
-        # 비밀키는 외부에 유출되면 안 되므로 소유자만 읽고 쓸 수 있도록 권한(chmod 600)을 엄격하게 제한하여 저장
-        fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
-        with os.fdopen(fd, "wb") as f:
-            f.write(_client_sig_sk)
-            
-        # 공개키는 누구나 읽어도 상관없으므로 일반적인 방식으로 저장
-        with open(sig_pub_file, "wb") as f:
-            f.write(_client_sig_pk)
-            
-    return _client_sig_pk, _client_sig_sk
 
 class PQCClient:
     """
@@ -84,17 +39,7 @@ class PQCClient:
         self.sent_size = 0
         self.file_hash = None
 
-        import uuid
-        key_dir = os.path.expanduser("~/.pqc_transfer_keys")
-        os.makedirs(key_dir, exist_ok=True)
-        id_file = os.path.join(key_dir, "client_id.txt")
-        if os.path.exists(id_file):
-            with open(id_file, "r") as f:
-                self.client_id = f.read().strip()
-        else:
-            self.client_id = str(uuid.uuid4())
-            with open(id_file, "w") as f:
-                f.write(self.client_id)
+        self.client_id = utils.get_client_id()
 
     def transfer(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -189,20 +134,9 @@ class PQCClient:
         utils.log("PASS", "SIGN", "서버 서명 검증 성공 (KEM 공개키 무결성 확인)")
 
         # 서버 서명 공개키에 대한 TOFU 로직 (서버 고정 신원 확인)
-        server_id_dir = os.path.expanduser("~/.pqc_transfer_keys")
-        trusted_server_file = os.path.join(server_id_dir, f"trusted_server_sig_{utils.SERVER_IP}.bin")
-        
-        if os.path.exists(trusted_server_file):
-            with open(trusted_server_file, "rb") as f:
-                trusted_pub = f.read()
-            if trusted_pub != server_sig_pk:
-                utils.log("FAIL", "VERIFY", "서버 인증 실패: 서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
-                raise ConnectionError("서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
-            # TOFU 갱신 (LRU는 클라이언트 쪽이므로 생략)
-        else:
-            with open(trusted_server_file, "wb") as f:
-                f.write(server_sig_pk)
-            utils.log("INFO", "VERIFY", "새로운 서버의 서명 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
+        if not utils.verify_and_trust_server(utils.SERVER_IP, server_sig_pk):
+            utils.log("FAIL", "VERIFY", "서버 인증 실패: 서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
+            raise ConnectionError("서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
 
         # 3. 양자 내성 암호(PQC) 기반 KEM을 사용하여 공유 비밀키(shared_secret)와 암호문(kem_ciphertext) 생성
         with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
@@ -264,8 +198,8 @@ class PQCClient:
             utils.log("INFO", "COMPRESS", f"'{ext}' 파일은 이미 압축/암호화되어 있어 Zlib 스트리밍 압축을 생략합니다.")
             
         chunk_index = 0
-        # 스트리밍 압축을 위해 압축 객체를 초기화합니다. (압축 레벨 1로 속도 우선)
-        compressor = zlib.compressobj(level=1) if use_compression else None
+        # 스트리밍 압축을 위해 압축 객체를 초기화합니다. (압축 레벨 1, memLevel=9로 속도 우선 최적화)
+        compressor = zlib.compressobj(level=1, wbits=15, memLevel=9) if use_compression else None
 
         utils.log("INFO", "CHUNK", f"청크 크기: {utils.CHUNK_SIZE} 바이트")
         utils.log("INFO", "CHUNK", "청크 전송 시작")
@@ -284,6 +218,10 @@ class PQCClient:
                 # 버퍼(buffer) 크기만큼 파일에서 데이터를 읽어옵니다. (readinto 활용으로 zero-copy)
                 bytes_read = f.readinto(buffer)
                 
+                # 파일이 전송 중에 커지는 경우를 방지하기 위해 원래 파일 크기까지만 읽도록 제한합니다.
+                if self.sent_size + bytes_read > self.filesize:
+                    bytes_read = self.filesize - self.sent_size
+
                 # 파일의 끝(EOF)에 도달한 경우 (읽은 바이트가 0일 때)
                 if bytes_read == 0:
                     # 플래그: 0x01(압축) 또는 0x00(비압축) 상태에 0x02(EOF) 비트를 더해 마지막 패킷임을 명시합니다.
@@ -293,20 +231,19 @@ class PQCClient:
                     
                     # 최적화: struct.pack 대신 to_bytes 사용
                     nonce = chunk_index.to_bytes(8, 'big') + base_nonce_suffix
-                    # AES-GCM 인증 태그 크기(16바이트)를 포함하여 임시 페이로드 길이 계산
-                    temp_payload_len = len(nonce) + len(chunk_data) + 16
+                    # AES-GCM 인증 태그 크기(16바이트)를 포함하여 페이로드 길이 계산 (nonce 길이는 12)
+                    payload_len = 12 + len(chunk_data) + 16
                     # Associated Data(AAD)로 사용하기 위한 13바이트 헤더 조립 (플래그 1B + 인덱스 8B + 길이 4B)
-                    header = header_struct.pack(flags, chunk_index, temp_payload_len)
+                    header = header_struct.pack(flags, chunk_index, payload_len)
                     
                     # 데이터를 AES-GCM으로 암호화합니다. 헤더를 AAD로 제공하여 헤더 변조도 감지할 수 있게 합니다.
                     encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
-                    # 실제 암호문 생성 후, Nonce 길이를 포함하여 최종 페이로드 길이를 계산합니다.
-                    payload_len = len(nonce) + len(encrypted_chunk)
-                    # 최종 계산된 페이로드 길이로 헤더를 다시 구성합니다.
-                    header = header_struct.pack(flags, chunk_index, payload_len)
                     
-                    # 헤더, Nonce, 암호화된 청크 데이터를 순차적으로 소켓을 통해 전송합니다.
-                    self.socket.sendall(header + nonce + encrypted_chunk)
+                    # 최적화: OS가 sendmsg를 지원하는 경우 메모리 복사 없이(zero-copy) 여러 버퍼를 한 번에 전송
+                    if hasattr(self.socket, "sendmsg"):
+                        self.socket.sendmsg([header, nonce, encrypted_chunk])
+                    else:
+                        self.socket.sendall(header + nonce + encrypted_chunk)
                     break # 마지막 청크 전송을 마치고 무한 루프 종료
                     
                 # 버퍼 전체가 아닌 실제로 읽은 바이트만큼만 잘라내는 memoryview (메모리 복사 없음)
@@ -317,25 +254,31 @@ class PQCClient:
                 # 압축 여부에 따라 플래그 설정 및 압축 수행
                 flags = 0x01 if use_compression else 0x00
                 if use_compression:
-                    chunk_data = compressor.compress(chunk_view) + compressor.flush(zlib.Z_SYNC_FLUSH)
+                    chunk_data = compressor.compress(chunk_view)
                 else:
                     chunk_data = chunk_view
+
+                # 최적화: 압축 버퍼링으로 인해 결과가 비어있는 경우 전송 생략 (네트워크 효율 증가)
+                if len(chunk_data) == 0:
+                    self.sent_size += bytes_read
+                    continue
 
                 # 최적화: struct.pack 대신 to_bytes 사용
                 nonce = chunk_index.to_bytes(8, 'big') + base_nonce_suffix
                 # [청크 헤더 구조: 총 13바이트]
-                # 취약점 패치: 헤더를 인증 데이터(AAD)로 사용하기 위해 임시 길이로 먼저 패킹
-                temp_payload_len = len(nonce) + len(chunk_data) + 16 # tag(16)
-                header = header_struct.pack(flags, chunk_index, temp_payload_len)
-                
-                # 데이터 암호화 (무결성 및 기밀성 확보)
-                encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
-                # 최종 페이로드 길이 도출 및 헤더 재구성
-                payload_len = len(nonce) + len(encrypted_chunk)
+                # 페이로드 길이 계산 (nonce 크기 12 + 평문 크기 + 태그 크기 16)
+                payload_len = 12 + len(chunk_data) + 16
                 header = header_struct.pack(flags, chunk_index, payload_len)
                 
+                # 데이터 암호화 (무결성 및 기밀성 확보, 헤더를 AAD로 사용)
+                encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
+                
                 # 네트워크로 전송
-                self.socket.sendall(header + nonce + encrypted_chunk)
+                # 최적화: OS가 sendmsg를 지원하는 경우 메모리 복사 없이(zero-copy) 여러 버퍼를 한 번에 전송
+                if hasattr(self.socket, "sendmsg"):
+                    self.socket.sendmsg([header, nonce, encrypted_chunk])
+                else:
+                    self.socket.sendall(header + nonce + encrypted_chunk)
                 
                 # 전체 진행 상황을 누적 집계하여 출력
                 self.sent_size += bytes_read
@@ -372,7 +315,7 @@ class PQCClient:
         sign_start_time = time.perf_counter()
         
         # 클라이언트 서명 키를 메모리에 캐싱된 함수를 통해 로드 (디스크 I/O 최적화)
-        sig_public_key, secret_key = get_client_sig_keys()
+        sig_public_key, secret_key = utils.get_client_sig_keys()
         
         with oqs.Signature(utils.SIG_ALG, secret_key=secret_key) as signer:
             signature = signer.sign(metadata_for_sign)

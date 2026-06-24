@@ -10,76 +10,17 @@ import threading
 
 import oqs
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import re
+
+CLIENT_ID_PATTERN = re.compile(r'^[\w-]+$')
 
 from . import utils
 
 # 자동으로 저장될 디렉토리 이름 지정
 SAVE_DIR = "received_files"
 
-# 클라이언트 IP별 신뢰할 수 있는 서명 공개키 목록 (TOFU 메커니즘)
-TRUSTED_KEYS = {}
-
 # 파일 저장 시 이름 충돌 방지를 위한 전역 락
 _file_save_lock = threading.Lock()
-
-# TOFU(Trust On First Use) 신뢰 목록 동시 접근 제어를 위한 전역 락
-_tofu_lock = threading.Lock()
-
-_server_sig_lock = threading.Lock()
-_server_sig_pk = None
-_server_sig_sk = None
-
-def get_server_sig_keys():
-    """
-    서버의 서명용 공개키(Public Key) 및 비밀키(Secret Key) 쌍을 로드하거나 새로 생성합니다.
-    서버의 서명 키가 고정되어야 클라이언트가 TOFU(Trust On First Use) 방식으로 서버를 인증할 수 있습니다.
-    멀티스레딩 환경에서 키를 안전하게 한 번만 로드하도록 스레드 락(Lock)을 사용합니다.
-    
-    Returns:
-        tuple: (공개키 바이트열, 비밀키 바이트열)
-    """
-    global _server_sig_pk, _server_sig_sk
-    
-    # 이미 메모리에 키가 로드되어 있으면 빠르게 반환
-    if _server_sig_pk is not None:
-        return _server_sig_pk, _server_sig_sk
-        
-    # 다중 클라이언트 접속으로 인해 여러 스레드가 동시에 키를 초기화하려 하는 것을 방지하기 위해 락 획득
-    with _server_sig_lock:
-        # 락 대기 중 다른 스레드에 의해 로드되었을 수 있으므로 이중 검사(Double-checked locking)
-        if _server_sig_pk is not None:
-            return _server_sig_pk, _server_sig_sk
-            
-        # 사용자 홈 디렉토리 내에 키 저장소 폴더 경로 설정
-        server_key_dir = os.path.expanduser("~/.pqc_transfer_keys")
-        os.makedirs(server_key_dir, exist_ok=True)
-        
-        sig_sec_file = os.path.join(server_key_dir, "server_sig_sec.bin")
-        sig_pub_file = os.path.join(server_key_dir, "server_sig_pub.bin")
-        
-        # 파일 시스템에 키가 이미 존재하는 경우 해당 파일을 읽어 로드
-        if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
-            with open(sig_sec_file, "rb") as f:
-                _server_sig_sk = f.read()
-            with open(sig_pub_file, "rb") as f:
-                _server_sig_pk = f.read()
-        else:
-            # 키 쌍이 없다면 양자 내성 서명 알고리즘(예: ML-DSA)을 사용하여 키 쌍을 새로 생성
-            import stat
-            with oqs.Signature(utils.SIG_ALG) as signer:
-                _server_sig_pk = signer.generate_keypair()
-                _server_sig_sk = signer.export_secret_key()
-            
-            # 비밀키는 민감한 정보이므로 현재 사용자만 읽고 쓸 수 있도록 파일 권한(chmod 600)을 엄격히 지정하여 저장
-            fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
-            with os.fdopen(fd, "wb") as f:
-                f.write(_server_sig_sk)
-            
-            # 공개키는 일반적인 파일 쓰기 모드로 저장
-            with open(sig_pub_file, "wb") as f:
-                f.write(_server_sig_pk)
-                
-        return _server_sig_pk, _server_sig_sk
 
 class PQCServerHandler:
     """
@@ -156,7 +97,7 @@ class PQCServerHandler:
             utils.log("INFO", "KEM", "ML-KEM 임시(Ephemeral) 키쌍 생성 완료")
 
             # [보안 추가] 서버의 정적 서명 키를 로드하거나 생성하여 KEM 공개키에 서명 (MitM 완벽 방어)
-            server_sig_pk, server_sig_sk = get_server_sig_keys()
+            server_sig_pk, server_sig_sk = utils.get_server_sig_keys()
 
             with oqs.Signature(utils.SIG_ALG, secret_key=server_sig_sk) as signer:
                 server_signature = signer.sign(public_key)
@@ -250,12 +191,16 @@ class PQCServerHandler:
         expected_chunk_index = 0
         transfer_start_time = time.perf_counter()
         header_struct = struct.Struct("!BQI")
+        
+        # 최적화: 헤더 수신을 위한 고정 크기 버퍼 사전 할당 (Zero-copy)
+        header_buffer = bytearray(13)
+        header_view = memoryview(header_buffer)
 
         while True:
             # 1. 13바이트 고정 길이의 헤더를 수신합니다. (1바이트 플래그, 8바이트 인덱스, 4바이트 페이로드 길이)
-            header = utils.recv_exact(self.conn, 13)
+            utils.recv_exact_into(self.conn, header_view, 13)
             # 수신한 헤더 바이너리를 파이썬 변수로 언패킹합니다. (플래그 1B, 인덱스 8B, 페이로드 길이 4B)
-            flags, chunk_index, payload_len = header_struct.unpack(header)
+            flags, chunk_index, payload_len = header_struct.unpack(header_buffer)
 
             # 공격자가 청크 순서를 조작하거나 누락시키는 재전송(Replay)/순서 조작 공격을 방지하기 위한 검증입니다.
             if chunk_index != expected_chunk_index:
@@ -278,7 +223,7 @@ class PQCServerHandler:
             try:
                 # AES-GCM을 사용하여 복호화 및 무결성 검증을 동시에 수행합니다.
                 # header 전체를 Associated Data(AAD)로 사용하여, 누군가 헤더 정보(예: 인덱스나 플래그)를 변조하면 복호화가 실패하도록 합니다.
-                decrypted_chunk = aesgcm.decrypt(nonce, encrypted_chunk, associated_data=header)
+                decrypted_chunk = aesgcm.decrypt(nonce, encrypted_chunk, associated_data=header_buffer)
             except Exception as e:
                 utils.log("ERROR", "CHUNK", f"인덱스 {chunk_index}에서 청크 복호화 실패(무결성 훼손 가능성): {e}")
                 return self.abort("청크 무결성 검증 실패 (데이터 변조 또는 키 불일치)")
@@ -298,7 +243,8 @@ class PQCServerHandler:
                     return self.abort("데이터 압축 해제 실패 (데이터 손상 의심)")
 
             # 안전하게 복호화 및 압축 해제된 순수 원본 데이터를 임시 파일에 기록합니다.
-            if len(decrypted_chunk) == 0 and not (flags & 0x02):
+            # 스트리밍 압축 시 zlib.decompress가 데이터를 버퍼링하여 빈 문자열을 반환할 수 있으므로 압축 사용 시에는 허용합니다.
+            if len(decrypted_chunk) == 0 and not (flags & 0x02) and not (flags & 0x01):
                 utils.log("ERROR", "CHUNK", "의미 없는 0바이트 청크 수신 (무한 루프 DoS 방어)")
                 return self.abort("비정상적인 0바이트 청크 데이터")
                 
@@ -337,7 +283,6 @@ class PQCServerHandler:
         utils.log("INFO", "HASH", f"클라이언트가 전송한 원본 SHA-256: {expected_hash}")
 
         # Replay 공격(재전송 공격) 방지를 위한 1회용 Challenge Nonce 생성 및 전송
-        import os
         challenge_nonce = os.urandom(32).hex()
         utils.send_with_length(self.conn, challenge_nonce.encode("utf-8"))
         utils.log("INFO", "VERIFY", "Replay 방지용 Challenge Nonce 전송 완료")
@@ -356,35 +301,14 @@ class PQCServerHandler:
         utils.log("INFO", "SIGN", f"서명 공개키 수신 완료 ({len(sig_public_key)} 바이트)")
 
         # TOFU(Trust On First Use) 기반 최초 접속 공개키 신뢰 및 검증
-        client_id_dir = os.path.expanduser("~/.pqc_transfer_keys")
-        os.makedirs(client_id_dir, exist_ok=True)
         # 보안 패치: 디렉토리 순회 공격 방지를 위해 client_id 검증 (알파벳, 숫자, 하이픈, 언더스코어만 허용)
-        import re
-        if not re.match(r'^[\w-]+$', self.client_id):
+        if not CLIENT_ID_PATTERN.match(self.client_id):
             utils.log("FAIL", "VERIFY", "유효하지 않은 클라이언트 ID 포맷입니다.")
             return self.abort("유효하지 않은 클라이언트 ID 포맷")
         
-        trusted_client_file = os.path.join(client_id_dir, f"trusted_client_sig_{self.client_id}.bin")
-
-        with _tofu_lock:
-            if self.client_id in TRUSTED_KEYS:
-                trusted_pub = TRUSTED_KEYS[self.client_id]
-                if trusted_pub != sig_public_key:
-                    utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
-                    return self.abort("송신자 인증 실패 (MitM 공격 방어)")
-            else:
-                if os.path.exists(trusted_client_file):
-                    with open(trusted_client_file, "rb") as f:
-                        trusted_pub = f.read()
-                    if trusted_pub != sig_public_key:
-                        utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
-                        return self.abort("송신자 인증 실패 (MitM 공격 방어)")
-                    TRUSTED_KEYS[self.client_id] = trusted_pub
-                else:
-                    with open(trusted_client_file, "wb") as f:
-                        f.write(sig_public_key)
-                    TRUSTED_KEYS[self.client_id] = sig_public_key
-                    utils.log("INFO", "VERIFY", f"새로운 클라이언트({self.client_id[:8]}) 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
+        if not utils.verify_and_trust_client(self.client_id, sig_public_key):
+            utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
+            return self.abort("송신자 인증 실패 (MitM 공격 방어)")
 
         signature = utils.recv_with_length(self.conn, max_len=20000)
         

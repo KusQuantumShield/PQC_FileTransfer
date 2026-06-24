@@ -71,5 +71,8 @@ def send_with_length(sock: socket.socket, data: bytes) -> None:
     데이터 본문을 보내기 직전에, 해당 데이터의 전체 길이(바이트 수)를 4바이트 헤더로 먼저 덧붙여 전송합니다.
     """
     # 1. len(data)로 전체 길이를 구한 뒤, struct.pack("!I", ...)를 통해 4바이트 네트워크 바이트 순서로 패킹
-    # 2. 4바이트 헤더와 실제 데이터를 바이트 연결(+)하여, 한 번의 sendall 시스템 콜로 신속히 전송
-    sock.sendall(struct.pack("!I", len(data)) + data)
+    # 2. 4바이트 헤더와 실제 데이터를 바이트 연결(+)하여 전송하거나, sendmsg로 메모리 복사 없이 전송
+    if hasattr(sock, "sendmsg"):
+        sock.sendmsg([struct.pack("!I", len(data)), data])
+    else:
+        sock.sendall(struct.pack("!I", len(data)) + data)
