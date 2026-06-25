@@ -346,18 +346,18 @@ class PQCServerHandler:
                 sign_verify_start_time = time.perf_counter()
                 # 양자 내성 암호(PQC) 기반 전자서명(예: ML-DSA) 알고리즘으로 서명 검증 수행
                 is_valid = verifier.verify(metadata_for_verify, signature, sig_public_key)
-            sign_verify_end_time = time.perf_counter()
+                sign_verify_end_time = time.perf_counter()
 
-            if not is_valid:
-                utils.log("FAIL", "SIGN", "서명 검증 실패")
-                utils.log("FAIL", "VERIFY", "송신자 인증 실패")
-                return self.abort("전자서명 검증 실패 (파일 변조 또는 위장 의심)")
+                if not is_valid:
+                    utils.log("FAIL", "SIGN", "서명 검증 실패")
+                    utils.log("FAIL", "VERIFY", "송신자 인증 실패")
+                    return self.abort("전자서명 검증 실패 (파일 변조 또는 위장 의심)")
 
-            utils.log("PASS", "SIGN", f"서명 검증 성공 (소요 시간: {sign_verify_end_time - sign_verify_start_time:.4f} 초)")
-            utils.log("PASS", "VERIFY", "송신자 인증 성공")
-        except Exception as e:
-            utils.log("ERROR", "SIGN", f"서명 검증 오류: {e}", exc_info=True)
-            return self.abort("전자서명 검증 처리 중 예기치 않은 오류 발생")
+                utils.log("PASS", "SIGN", f"서명 검증 성공 (소요 시간: {sign_verify_end_time - sign_verify_start_time:.4f} 초)")
+                utils.log("PASS", "VERIFY", "송신자 인증 성공")
+            except Exception as e:
+                utils.log("ERROR", "SIGN", f"서명 검증 오류: {e}", exc_info=True)
+                return self.abort("전자서명 검증 처리 중 예기치 않은 오류 발생")
 
         utils.log("PASS", "VERIFY", "파일 무결성: 통과")
         utils.log("PASS", "VERIFY", "송신자 인증: 통과")

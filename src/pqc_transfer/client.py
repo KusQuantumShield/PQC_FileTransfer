@@ -245,14 +245,8 @@ class PQCClient:
                     # 데이터를 AES-GCM으로 암호화합니다. 헤더를 AAD로 제공하여 헤더 변조도 감지할 수 있게 합니다.
                     encrypted_chunk = aesgcm.encrypt(nonce_view, chunk_data, associated_data=header_view)
                     
-                    # 안정성: OS에서 scatter/gather I/O (sendmsg)를 지원하는 경우 복사 없이 전송
-                    if hasattr(self.socket, "sendmsg"):
-                        try:
-                            self.socket.sendmsg([header_view, nonce_view, encrypted_chunk])
-                        except Exception:
-                            self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
-                    else:
-                        self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
+                    # 안정성: TCP 스트림이 끊기지 않도록 sendall을 통해 전체 데이터 전송을 보장합니다.
+                    self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
                     break # 마지막 청크 전송을 마치고 무한 루프 종료
                     
                 # 버퍼 전체가 아닌 실제로 읽은 바이트만큼만 잘라내는 memoryview (메모리 복사 없음)
@@ -283,14 +277,8 @@ class PQCClient:
                 encrypted_chunk = aesgcm.encrypt(nonce_view, chunk_data, associated_data=header_view)
                 
                 # 네트워크로 전송
-                # 안정성: OS에서 scatter/gather I/O (sendmsg)를 지원하는 경우 복사 없이 전송
-                if hasattr(self.socket, "sendmsg"):
-                    try:
-                        self.socket.sendmsg([header_view, nonce_view, encrypted_chunk])
-                    except Exception:
-                        self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
-                else:
-                    self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
+                # 안정성: TCP 스트림이 끊기지 않도록 sendall을 통해 전체 데이터 전송을 보장합니다.
+                self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
                 
                 # 전체 진행 상황을 누적 집계하여 출력
                 self.sent_size += bytes_read
