@@ -19,6 +19,10 @@ _logger.setLevel(logging.DEBUG)
 
 # 중복 핸들러 추가 방지를 위한 체크
 if not _logger.handlers:
+    import queue
+    import atexit
+    from logging.handlers import QueueHandler, QueueListener
+
     # 1. 터미널(Console) 출력 핸들러: 색상을 적용한 직관적인 포맷
     class ColorFormatter(logging.Formatter):
         def format(self, record):
@@ -31,7 +35,6 @@ if not _logger.handlers:
 
     _console_handler = logging.StreamHandler(sys.stdout)
     _console_handler.setFormatter(ColorFormatter())
-    _logger.addHandler(_console_handler)
 
     # 2. 파일 출력 핸들러: 파일에는 색상 코드를 빼고 타임스탬프를 추가하여 기록
     # 파일명: pqc_transfer.log (스크립트 실행 위치에 생성됨)
@@ -44,7 +47,19 @@ if not _logger.handlers:
     )
     _file_formatter = logging.Formatter('%(asctime)s [%(custom_level)s][%(module_name)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     _file_handler.setFormatter(_file_formatter)
-    _logger.addHandler(_file_handler)
+
+    # 3. 비동기 로깅 큐 적용 (최적화)
+    # 서버 환경에서 파일/콘솔 I/O 병목으로 인해 네트워크 및 암호화 스레드가 지연되는 것을 방지합니다.
+    _log_queue = queue.Queue(-1)
+    _queue_handler = QueueHandler(_log_queue)
+    _logger.addHandler(_queue_handler)
+
+    # 큐의 이벤트를 백그라운드 스레드에서 처리하여 핸들러들에게 전달합니다.
+    _listener = QueueListener(_log_queue, _console_handler, _file_handler)
+    _listener.start()
+
+    # 프로세스 정상 종료 시 큐 리스너를 안전하게 종료하여 남은 로그를 모두 기록하도록 보장합니다.
+    atexit.register(_listener.stop)
 
 
 def log(level: str, module: str, message: str, exc_info: bool = False):

@@ -101,45 +101,41 @@ class PQCClient:
         # 2. 서버의 KEM(키 캡슐화 메커니즘) 공개키 수신
         public_key = utils.recv_exact(self.socket, pk_len)
         
-        # [취약점 패치] 수신한 공개키의 길이가 KEM 알고리즘의 규격과 일치하는지 검증 (Buffer Over-read 방지)
+        # [취약점 패치 및 최적화] KEM과 서명 객체를 한 번만 초기화하여 불필요한 메모리 할당 및 해제 방지
         with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
             expected_pk_len = kem.details['length_public_key']
-        if len(public_key) != expected_pk_len:
-            utils.log("ERROR", "KEM", f"유효하지 않은 서버 공개키 길이: {len(public_key)} (예상: {expected_pk_len})")
-            raise ValueError(f"유효하지 않은 서버 공개키 길이 (크래시 방어)")
+            if len(public_key) != expected_pk_len:
+                utils.log("ERROR", "KEM", f"유효하지 않은 서버 공개키 길이: {len(public_key)} (예상: {expected_pk_len})")
+                raise ValueError(f"유효하지 않은 서버 공개키 길이 (크래시 방어)")
+                
+            # [보안 추가] 서버가 전송한 임시 KEM 공개키에 대한 서명과 서명 공개키를 수신하여 검증 (MitM 완벽 방어)
+            server_sig_pk = utils.recv_with_length(self.socket, max_len=20000)
+            server_signature = utils.recv_with_length(self.socket, max_len=20000)
             
-        # [보안 수정] 서버 인증을 위해 정적 KEM 키를 고정(TOFU)하는 로직은 전방향 안전성(Forward Secrecy)을 훼손합니다.
-        # 서버는 매번 임시(Ephemeral) 키쌍을 사용해야 하며, 서버의 인증은 서명을 통해 수행하는 것이 올바른 PQC 설계입니다.
-        
-        # [보안 추가] 서버가 전송한 임시 KEM 공개키에 대한 서명과 서명 공개키를 수신하여 검증 (MitM 완벽 방어)
-        server_sig_pk = utils.recv_with_length(self.socket, max_len=20000)
-        server_signature = utils.recv_with_length(self.socket, max_len=20000)
-        
-        with oqs.Signature(utils.SIG_ALG) as verifier:
-            expected_sig_pk_len = verifier.details['length_public_key']
-            expected_sig_len = verifier.details['length_signature']
-            
-        if len(server_sig_pk) != expected_sig_pk_len:
-            utils.log("ERROR", "SIGN", f"유효하지 않은 서버 서명 공개키 길이: {len(server_sig_pk)}")
-            raise ValueError("유효하지 않은 서버 서명 공개키 길이 (크래시 방어)")
-            
-        if len(server_signature) != expected_sig_len:
-            utils.log("ERROR", "SIGN", f"유효하지 않은 서버 서명 길이: {len(server_signature)}")
-            raise ValueError("유효하지 않은 서버 서명 길이 (크래시 방어)")
+            with oqs.Signature(utils.SIG_ALG) as verifier:
+                expected_sig_pk_len = verifier.details['length_public_key']
+                expected_sig_len = verifier.details['length_signature']
+                
+                if len(server_sig_pk) != expected_sig_pk_len:
+                    utils.log("ERROR", "SIGN", f"유효하지 않은 서버 서명 공개키 길이: {len(server_sig_pk)}")
+                    raise ValueError("유효하지 않은 서버 서명 공개키 길이 (크래시 방어)")
+                    
+                if len(server_signature) != expected_sig_len:
+                    utils.log("ERROR", "SIGN", f"유효하지 않은 서버 서명 길이: {len(server_signature)}")
+                    raise ValueError("유효하지 않은 서버 서명 길이 (크래시 방어)")
 
-        with oqs.Signature(utils.SIG_ALG) as verifier:
-            if not verifier.verify(public_key, server_signature, server_sig_pk):
-                utils.log("FAIL", "SIGN", "서버 서명 검증 실패: 임시 KEM 공개키가 변조되었습니다! (MitM 공격 의심)")
-                raise ConnectionError("서버 서명 검증 실패 (MitM 공격 의심)")
-        utils.log("PASS", "SIGN", "서버 서명 검증 성공 (KEM 공개키 무결성 확인)")
+                if not verifier.verify(public_key, server_signature, server_sig_pk):
+                    utils.log("FAIL", "SIGN", "서버 서명 검증 실패: 임시 KEM 공개키가 변조되었습니다! (MitM 공격 의심)")
+                    raise ConnectionError("서버 서명 검증 실패 (MitM 공격 의심)")
+                    
+            utils.log("PASS", "SIGN", "서버 서명 검증 성공 (KEM 공개키 무결성 확인)")
 
-        # 서버 서명 공개키에 대한 TOFU 로직 (서버 고정 신원 확인)
-        if not utils.verify_and_trust_server(utils.SERVER_IP, server_sig_pk):
-            utils.log("FAIL", "VERIFY", "서버 인증 실패: 서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
-            raise ConnectionError("서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
+            # 서버 서명 공개키에 대한 TOFU 로직 (서버 고정 신원 확인)
+            if not utils.verify_and_trust_server(utils.SERVER_IP, server_sig_pk):
+                utils.log("FAIL", "VERIFY", "서버 인증 실패: 서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
+                raise ConnectionError("서버의 서명 공개키가 변경되었습니다! (MitM 공격 의심)")
 
-        # 3. 양자 내성 암호(PQC) 기반 KEM을 사용하여 공유 비밀키(shared_secret)와 암호문(kem_ciphertext) 생성
-        with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
+            # 3. 양자 내성 암호(PQC) 기반 KEM을 사용하여 공유 비밀키(shared_secret)와 암호문(kem_ciphertext) 생성
             kem_ciphertext, shared_secret = kem.encap_secret(public_key)
 
         utils.log("PASS", "KEM", "캡슐화 완료")
@@ -210,9 +206,19 @@ class PQCClient:
         
         # 최적화: 매 루프마다 포맷 문자열 파싱을 피하기 위해 struct를 사전 컴파일
         header_struct = struct.Struct("!BQI")
+        nonce_struct = struct.Struct("!Q")
+
+        # 최적화: 헤더와 Nonce를 매번 새로 만들지 않고 미리 할당된 버퍼를 재사용 (Zero-copy)
+        header_buffer = bytearray(13)
+        header_view = memoryview(header_buffer)
+        
+        nonce_buffer = bytearray(12)
+        nonce_buffer[8:12] = base_nonce_suffix
+        nonce_view = memoryview(nonce_buffer)
 
         # 불필요한 메모리 복사를 방지하기 위해 고정 크기(CHUNK_SIZE)의 바이트 배열을 생성합니다.
         buffer = bytearray(utils.CHUNK_SIZE)
+        buffer_view = memoryview(buffer)
         with open(self.file_path, "rb") as f:
             while True:
                 # 버퍼(buffer) 크기만큼 파일에서 데이터를 읽어옵니다. (readinto 활용으로 zero-copy)
@@ -229,25 +235,28 @@ class PQCClient:
                     # Zlib의 버퍼에 남아있는 모든 데이터를 밀어내어(flush) 암호화할 마지막 조각을 만듭니다.
                     chunk_data = compressor.flush(zlib.Z_FINISH) if use_compression else b""
                     
-                    # 최적화: struct.pack 대신 to_bytes 사용
-                    nonce = chunk_index.to_bytes(8, 'big') + base_nonce_suffix
+                    # 최적화: 할당된 버퍼를 재사용하여 객체 생성 비용 제거
+                    nonce_struct.pack_into(nonce_buffer, 0, chunk_index)
                     # AES-GCM 인증 태그 크기(16바이트)를 포함하여 페이로드 길이 계산 (nonce 길이는 12)
                     payload_len = 12 + len(chunk_data) + 16
                     # Associated Data(AAD)로 사용하기 위한 13바이트 헤더 조립 (플래그 1B + 인덱스 8B + 길이 4B)
-                    header = header_struct.pack(flags, chunk_index, payload_len)
+                    header_struct.pack_into(header_buffer, 0, flags, chunk_index, payload_len)
                     
                     # 데이터를 AES-GCM으로 암호화합니다. 헤더를 AAD로 제공하여 헤더 변조도 감지할 수 있게 합니다.
-                    encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
+                    encrypted_chunk = aesgcm.encrypt(nonce_view, chunk_data, associated_data=header_view)
                     
-                    # 최적화: OS가 sendmsg를 지원하는 경우 메모리 복사 없이(zero-copy) 여러 버퍼를 한 번에 전송
+                    # 안정성: OS에서 scatter/gather I/O (sendmsg)를 지원하는 경우 복사 없이 전송
                     if hasattr(self.socket, "sendmsg"):
-                        self.socket.sendmsg([header, nonce, encrypted_chunk])
+                        try:
+                            self.socket.sendmsg([header_view, nonce_view, encrypted_chunk])
+                        except Exception:
+                            self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
                     else:
-                        self.socket.sendall(header + nonce + encrypted_chunk)
+                        self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
                     break # 마지막 청크 전송을 마치고 무한 루프 종료
                     
                 # 버퍼 전체가 아닌 실제로 읽은 바이트만큼만 잘라내는 memoryview (메모리 복사 없음)
-                chunk_view = memoryview(buffer)[:bytes_read]
+                chunk_view = buffer_view[:bytes_read]
                 # 실시간으로 원본 데이터에 대한 SHA-256 해시 업데이트
                 self.file_hasher.update(chunk_view)
                 
@@ -263,22 +272,25 @@ class PQCClient:
                     self.sent_size += bytes_read
                     continue
 
-                # 최적화: struct.pack 대신 to_bytes 사용
-                nonce = chunk_index.to_bytes(8, 'big') + base_nonce_suffix
+                # 최적화: 버퍼 재사용
+                nonce_struct.pack_into(nonce_buffer, 0, chunk_index)
                 # [청크 헤더 구조: 총 13바이트]
                 # 페이로드 길이 계산 (nonce 크기 12 + 평문 크기 + 태그 크기 16)
                 payload_len = 12 + len(chunk_data) + 16
-                header = header_struct.pack(flags, chunk_index, payload_len)
+                header_struct.pack_into(header_buffer, 0, flags, chunk_index, payload_len)
                 
                 # 데이터 암호화 (무결성 및 기밀성 확보, 헤더를 AAD로 사용)
-                encrypted_chunk = aesgcm.encrypt(nonce, chunk_data, associated_data=header)
+                encrypted_chunk = aesgcm.encrypt(nonce_view, chunk_data, associated_data=header_view)
                 
                 # 네트워크로 전송
-                # 최적화: OS가 sendmsg를 지원하는 경우 메모리 복사 없이(zero-copy) 여러 버퍼를 한 번에 전송
+                # 안정성: OS에서 scatter/gather I/O (sendmsg)를 지원하는 경우 복사 없이 전송
                 if hasattr(self.socket, "sendmsg"):
-                    self.socket.sendmsg([header, nonce, encrypted_chunk])
+                    try:
+                        self.socket.sendmsg([header_view, nonce_view, encrypted_chunk])
+                    except Exception:
+                        self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
                 else:
-                    self.socket.sendall(header + nonce + encrypted_chunk)
+                    self.socket.sendall(header_buffer + nonce_buffer + encrypted_chunk)
                 
                 # 전체 진행 상황을 누적 집계하여 출력
                 self.sent_size += bytes_read

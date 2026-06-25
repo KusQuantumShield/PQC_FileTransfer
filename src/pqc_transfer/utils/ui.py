@@ -16,8 +16,12 @@ def sha256_file(file_path: str) -> str:
     """
     지정된 경로의 파일에 대해 SHA-256 해시를 계산하여 16진수 문자열로 반환합니다.
     대용량 파일(예: 수 GB)을 한 번에 메모리에 올리면 MemoryError(OOM)가 발생할 수 있으므로,
-    CHUNK_SIZE(보통 1MB) 단위로 나누어 점진적으로 읽고 해시 상태를 업데이트합니다.
+    CHUNK_SIZE 단위로 나누어 읽거나 Python 3.11+ 의 빠른 file_digest를 활용합니다.
     """
+    if hasattr(hashlib, 'file_digest'):
+        with open(file_path, "rb") as f:
+            return hashlib.file_digest(f, "sha256").hexdigest()
+            
     # hashlib 라이브러리의 sha256 해시 객체 초기화
     h = hashlib.sha256()
     # 메모리 복사본 생성을 방지하기 위해 고정 크기(CHUNK_SIZE) 버퍼와 memoryview 활용 (Zero-copy 최적화)

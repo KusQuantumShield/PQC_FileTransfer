@@ -181,8 +181,9 @@ class PQCServerHandler:
         # Zlib 압축 해제를 위한 decompressor 객체를 초기화합니다.
         decompressor = zlib.decompressobj()
 
-        # 한 번에 수신할 수 있는 최대 페이로드 크기를 설정합니다. (기본 청크 1MB + 메타데이터 여유 공간 10KB)
-        MAX_PAYLOAD_SIZE = utils.CHUNK_SIZE + 1024 * 10
+        # 한 번에 수신할 수 있는 최대 페이로드 크기를 설정합니다.
+        # 압축(zlib) 시 버퍼링되거나 무작위 데이터로 인해 원본 크기보다 커질 수 있으므로 여유롭게 2배로 잡습니다.
+        MAX_PAYLOAD_SIZE = utils.CHUNK_SIZE * 2
         # 불필요한 메모리 할당(복사)을 피하기 위해 고정 크기의 bytearray를 버퍼로 사용합니다.
         recv_buffer = bytearray(MAX_PAYLOAD_SIZE)
         # memoryview를 사용하여 버퍼의 특정 부분을 슬라이싱할 때 메모리 복사본이 생성되지 않도록 합니다.
@@ -200,7 +201,7 @@ class PQCServerHandler:
             # 1. 13바이트 고정 길이의 헤더를 수신합니다. (1바이트 플래그, 8바이트 인덱스, 4바이트 페이로드 길이)
             utils.recv_exact_into(self.conn, header_view, 13)
             # 수신한 헤더 바이너리를 파이썬 변수로 언패킹합니다. (플래그 1B, 인덱스 8B, 페이로드 길이 4B)
-            flags, chunk_index, payload_len = header_struct.unpack(header_buffer)
+            flags, chunk_index, payload_len = header_struct.unpack_from(header_buffer, 0)
 
             # 공격자가 청크 순서를 조작하거나 누락시키는 재전송(Replay)/순서 조작 공격을 방지하기 위한 검증입니다.
             if chunk_index != expected_chunk_index:
@@ -289,62 +290,61 @@ class PQCServerHandler:
 
         sig_public_key = utils.recv_with_length(self.conn, max_len=20000)
         
-        # [취약점 패치] 수신한 서명 공개키의 길이가 정확한지 검증 (Buffer Over-read 크래시 방지)
-        with oqs.Signature(utils.SIG_ALG) as temp_verifier:
-            expected_sig_pk_len = temp_verifier.details['length_public_key']
-            expected_sig_len = temp_verifier.details['length_signature']
+        # [취약점 패치 및 최적화] 서명 객체를 한 번만 초기화하여 불필요한 메모리 할당 및 해제 방지
+        with oqs.Signature(utils.SIG_ALG) as verifier:
+            expected_sig_pk_len = verifier.details['length_public_key']
+            expected_sig_len = verifier.details['length_signature']
             
-        if len(sig_public_key) != expected_sig_pk_len:
-            utils.log("ERROR", "SIGN", f"유효하지 않은 서명 공개키 길이: {len(sig_public_key)}")
-            return self.abort("유효하지 않은 서명 공개키 길이 (크래시 방어)")
+            if len(sig_public_key) != expected_sig_pk_len:
+                utils.log("ERROR", "SIGN", f"유효하지 않은 서명 공개키 길이: {len(sig_public_key)}")
+                return self.abort("유효하지 않은 서명 공개키 길이 (크래시 방어)")
+                
+            utils.log("INFO", "SIGN", f"서명 공개키 수신 완료 ({len(sig_public_key)} 바이트)")
+
+            # TOFU(Trust On First Use) 기반 최초 접속 공개키 신뢰 및 검증
+            # 보안 패치: 디렉토리 순회 공격 방지를 위해 client_id 검증 (알파벳, 숫자, 하이픈, 언더스코어만 허용)
+            if not CLIENT_ID_PATTERN.match(self.client_id):
+                utils.log("FAIL", "VERIFY", "유효하지 않은 클라이언트 ID 포맷입니다.")
+                return self.abort("유효하지 않은 클라이언트 ID 포맷")
             
-        utils.log("INFO", "SIGN", f"서명 공개키 수신 완료 ({len(sig_public_key)} 바이트)")
+            if not utils.verify_and_trust_client(self.client_id, sig_public_key):
+                utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
+                return self.abort("송신자 인증 실패 (MitM 공격 방어)")
 
-        # TOFU(Trust On First Use) 기반 최초 접속 공개키 신뢰 및 검증
-        # 보안 패치: 디렉토리 순회 공격 방지를 위해 client_id 검증 (알파벳, 숫자, 하이픈, 언더스코어만 허용)
-        if not CLIENT_ID_PATTERN.match(self.client_id):
-            utils.log("FAIL", "VERIFY", "유효하지 않은 클라이언트 ID 포맷입니다.")
-            return self.abort("유효하지 않은 클라이언트 ID 포맷")
-        
-        if not utils.verify_and_trust_client(self.client_id, sig_public_key):
-            utils.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
-            return self.abort("송신자 인증 실패 (MitM 공격 방어)")
-
-        signature = utils.recv_with_length(self.conn, max_len=20000)
-        
-        # [취약점 패치] 수신한 서명 데이터의 길이가 정확한지 검증 (Buffer Over-read 크래시 방지)
-        if len(signature) != expected_sig_len:
-            utils.log("ERROR", "SIGN", f"유효하지 않은 서명 길이: {len(signature)}")
-            return self.abort("유효하지 않은 서명 길이 (크래시 방어)")
+            signature = utils.recv_with_length(self.conn, max_len=20000)
             
-        utils.log("INFO", "SIGN", f"서명 수신 완료 ({len(signature)} 바이트)")
+            # [취약점 패치] 수신한 서명 데이터의 길이가 정확한지 검증 (Buffer Over-read 크래시 방지)
+            if len(signature) != expected_sig_len:
+                utils.log("ERROR", "SIGN", f"유효하지 않은 서명 길이: {len(signature)}")
+                return self.abort("유효하지 않은 서명 길이 (크래시 방어)")
+                
+            utils.log("INFO", "SIGN", f"서명 수신 완료 ({len(signature)} 바이트)")
 
-        utils.log("PASS", "FILE", "파일 크기 동적 동기화 성공")
+            utils.log("PASS", "FILE", "파일 크기 동적 동기화 성공")
 
-        received_hash = self.file_hasher.hexdigest()
-        
-        if self.received_size != self.original_filesize:
-            utils.log("FAIL", "FILE", f"파일 크기 불일치: 선언됨={self.original_filesize}, 수신됨={self.received_size}")
-            return self.abort("불완전한 파일 전송 (크기 불일치)")
+            received_hash = self.file_hasher.hexdigest()
             
-        if received_hash != expected_hash:
-            utils.log("FAIL", "HASH", "파일 해시 불일치")
-            utils.log("INFO", "HASH", f"예상됨: {expected_hash}, 계산됨: {received_hash}")
-            utils.log("FAIL", "VERIFY", "파일 무결성 검증 실패")
-            return self.abort("파일 무결성 검증 실패 (해시 불일치)")
-            
-        utils.log("PASS", "HASH", "파일 해시 검증 성공")
-        utils.log("INFO", "HASH", f"계산된 SHA-256: {received_hash}")
+            if self.received_size != self.original_filesize:
+                utils.log("FAIL", "FILE", f"파일 크기 불일치: 선언됨={self.original_filesize}, 수신됨={self.received_size}")
+                return self.abort("불완전한 파일 전송 (크기 불일치)")
+                
+            if received_hash != expected_hash:
+                utils.log("FAIL", "HASH", "파일 해시 불일치")
+                utils.log("INFO", "HASH", f"예상됨: {expected_hash}, 계산됨: {received_hash}")
+                utils.log("FAIL", "VERIFY", "파일 무결성 검증 실패")
+                return self.abort("파일 무결성 검증 실패 (해시 불일치)")
+                
+            utils.log("PASS", "HASH", "파일 해시 검증 성공")
+            utils.log("INFO", "HASH", f"계산된 SHA-256: {received_hash}")
 
-        # 무결성 검증을 위한 서명 데이터 조합 (MitM 세션 바인딩 및 Replay 방지 난수 포함)
-        # [보안 수정] 서명 데이터에 송신자의 고유 식별자(client_id)를 포함시켜 Identity Misbinding(릴레이 공격) 방어
-        session_key_hash = utils.hash_ss(self.session_key)
-        metadata_for_verify = f"{self.client_id}|{self.filename}|{self.received_size}|{received_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
+            # 무결성 검증을 위한 서명 데이터 조합 (MitM 세션 바인딩 및 Replay 방지 난수 포함)
+            # [보안 수정] 서명 데이터에 송신자의 고유 식별자(client_id)를 포함시켜 Identity Misbinding(릴레이 공격) 방어
+            session_key_hash = utils.hash_ss(self.session_key)
+            metadata_for_verify = f"{self.client_id}|{self.filename}|{self.received_size}|{received_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
-        try:
-            sign_verify_start_time = time.perf_counter()
-            # 양자 내성 암호(PQC) 기반 전자서명(예: ML-DSA) 알고리즘으로 서명 검증 수행
-            with oqs.Signature(utils.SIG_ALG) as verifier:
+            try:
+                sign_verify_start_time = time.perf_counter()
+                # 양자 내성 암호(PQC) 기반 전자서명(예: ML-DSA) 알고리즘으로 서명 검증 수행
                 is_valid = verifier.verify(metadata_for_verify, signature, sig_public_key)
             sign_verify_end_time = time.perf_counter()
 
@@ -384,20 +384,23 @@ class PQCServerHandler:
         if not self.temp_file.closed:
             self.temp_file.close()
 
-        # 전역 락을 사용하여 파일 이름 중복 확인과 파일 이동 간의 경쟁 상태(Race Condition) 방지
+        # 전역 락을 사용하여 파일 이름 중복 확인과 예약(선점)만 수행하여 임계 구역(Critical Section) 최소화
         with _file_save_lock:
             save_path = os.path.join(target_dir, self.filename)
             counter = 1
             while os.path.exists(save_path):
                 save_path = os.path.join(target_dir, f"{base_name}({counter}){ext}")
                 counter += 1
-                
-            # 파일 이동 전에 열려있는 파일 핸들을 명시적으로 닫아줍니다 (Windows OS 등에서 PermissionError 발생 방지)
-            if hasattr(self, 'temp_file') and self.temp_file and not self.temp_file.closed:
-                self.temp_file.close()
-                
-            shutil.move(self.temp_path, save_path)
-            self.temp_path = None
+            # 빈 파일을 즉시 생성하여 다른 클라이언트 스레드가 동일한 이름을 가져가지 못하도록 예약(선점)합니다.
+            open(save_path, 'a').close()
+            
+        # [최적화] 파일 이동(Move)은 파일 시스템에 따라 오래 걸릴 수 있으므로 락을 해제한 상태에서 병렬 처리합니다.
+        # 파일 이동 전에 열려있는 파일 핸들을 명시적으로 닫아줍니다 (Windows OS 등에서 PermissionError 발생 방지)
+        if hasattr(self, 'temp_file') and self.temp_file and not self.temp_file.closed:
+            self.temp_file.close()
+            
+        shutil.move(self.temp_path, save_path)
+        self.temp_path = None
 
         utils.log("RESULT", "TRANSFER", f"파일이 자동으로 저장됨: {save_path}")
         try:
@@ -450,9 +453,14 @@ def main():
     utils.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {utils.SIG_ALG}")
     utils.log("INFO", "SYSTEM", f"청크(Chunk) 크기: {utils.CHUNK_SIZE} 바이트")
 
+    from concurrent.futures import ThreadPoolExecutor
+
     # 최대 동시 접속자 수를 제한하여 스레드 폭발(Thread Exhaustion) DoS 공격 방어
     MAX_CONCURRENT_CLIENTS = 100
     connection_semaphore = threading.Semaphore(MAX_CONCURRENT_CLIENTS)
+    
+    # [서버 최적화] 매 연결마다 스레드를 생성하는 오버헤드를 없애기 위해 스레드 풀 적용
+    executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CLIENTS)
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -488,10 +496,10 @@ def main():
                     finally:
                         connection_semaphore.release()
                 
-                client_thread = threading.Thread(target=handle_client, args=(handler,), daemon=True)
-                client_thread.start()
+                executor.submit(handle_client, handler)
             except KeyboardInterrupt:
                 utils.log("INFO", "SYSTEM", "서버를 종료합니다.")
+                executor.shutdown(wait=False)
                 break
             except Exception as e:
                 utils.log("ERROR", "SYSTEM", f"서버 수신 오류: {e}")

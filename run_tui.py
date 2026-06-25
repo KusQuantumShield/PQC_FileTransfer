@@ -244,39 +244,44 @@ class TUIApp:
         logs = []
         
         while running:
-            try:
-                # 큐에서 수신된 로그 한 줄 가져오기 (비동기 처리)
-                line = q.get_nowait()
-                if line is None:
-                    # 프로세스가 정상적으로 끝남
-                    running = False
-                    logs.append("\n--- Process Finished ---")
+            lines_added = False
+            # [UI 최적화] 큐에 쌓인 로그를 한 번에 모두 읽은 뒤 한 번만 화면을 갱신(Redraw)하도록 Batch 처리
+            while True:
+                try:
+                    line = q.get_nowait()
+                    if line is None:
+                        # 프로세스가 정상적으로 끝남
+                        running = False
+                        logs.append("\n--- Process Finished ---")
+                        lines_added = True
+                        break
+                    
+                    # 가져온 로그 문자열 정제 (ANSI 코드 제거 및 공백 스트립)
+                    clean_line = ansi_escape.sub('', line).strip()
+                    if clean_line:
+                        logs.append(clean_line)
+                        lines_added = True
+                except queue.Empty:
                     break
-                
-                # 가져온 로그 문자열 정제 (ANSI 코드 제거 및 공백 스트립)
-                clean_line = ansi_escape.sub('', line).strip()
-                if clean_line:
-                    logs.append(clean_line)
-                    # 전체 로그를 유지하면서 화면(창) 크기에 맞게 최근 로그들만 추려내어 표시
-                    log_window.clear()
-                    display_logs = logs[-(h-4):]
-                    for i, log_line in enumerate(display_logs):
-                        color = 0
-                        # 로그의 키워드에 따라 curses 색상 지정 (패스/결과 -> 녹색, 에러/실패 -> 적색, 경고 -> 황색)
-                        if "[PASS]" in log_line or "[RESULT]" in log_line: color = curses.color_pair(2)
-                        elif "[ERROR]" in log_line or "[FAIL]" in log_line: color = curses.color_pair(3)
-                        elif "[WARN]" in log_line: color = curses.color_pair(4)
-                        
-                        try:
-                            # 너비를 넘어가는 문자로 인해 발생하는 curses 에러 방어
-                            log_window.addstr(i, 0, log_line[:w-1], color)
-                        except curses.error:
-                            pass
-                    # 변경된 로그 창 업데이트
-                    log_window.refresh()
-            except queue.Empty:
-                # 큐가 비어있으면 무시하고 넘어감
-                pass
+            
+            if lines_added:
+                # 전체 로그를 유지하면서 화면(창) 크기에 맞게 최근 로그들만 추려내어 표시
+                log_window.clear()
+                display_logs = logs[-(h-4):]
+                for i, log_line in enumerate(display_logs):
+                    color = 0
+                    # 로그의 키워드에 따라 curses 색상 지정 (패스/결과 -> 녹색, 에러/실패 -> 적색, 경고 -> 황색)
+                    if "[PASS]" in log_line or "[RESULT]" in log_line: color = curses.color_pair(2)
+                    elif "[ERROR]" in log_line or "[FAIL]" in log_line: color = curses.color_pair(3)
+                    elif "[WARN]" in log_line: color = curses.color_pair(4)
+                    
+                    try:
+                        # 너비를 넘어가는 문자로 인해 발생하는 curses 에러 방어
+                        log_window.addstr(i, 0, log_line[:w-1], color)
+                    except curses.error:
+                        pass
+                # 변경된 로그 창 업데이트
+                log_window.refresh()
                 
             # 사용자 키보드 입력 체크
             key = self.stdscr.getch()
