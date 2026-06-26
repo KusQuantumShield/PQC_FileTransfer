@@ -10,35 +10,24 @@ from . import logger
 
 class KeyManager:
     """
-    PQC 서명 키 및 클라이언트/서버 신원 정보를 중앙에서 안전하게 관리하는 클래스입니다.
-    기존의 전역 변수 구조에서 탈피하여 객체 지향적인 Singleton/Instance 형태로 관리할 수 있습니다.
+    PQC 서명 키 및 클라이언트/서버 신원 정보를 관리하는 클래스입니다.
+    의존성 주입을 통해 전역 상태와 싱글톤 패턴을 제거했습니다.
     """
-    _instance = None
-    _instance_lock = threading.Lock()
+    def __init__(self, key_dir: str, sig_alg: str):
+        self._server_sig_lock = threading.Lock()
+        self._server_sig_pk = None
+        self._server_sig_sk = None
 
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
-            with cls._instance_lock:
-                if not cls._instance:
-                    cls._instance = super(KeyManager, cls).__new__(cls)
-        return cls._instance
+        self._client_sig_lock = threading.Lock()
+        self._client_sig_pk = None
+        self._client_sig_sk = None
 
-    def __init__(self):
-        if not hasattr(self, '_initialized'):
-            self._server_sig_lock = threading.Lock()
-            self._server_sig_pk = None
-            self._server_sig_sk = None
-
-            self._client_sig_lock = threading.Lock()
-            self._client_sig_pk = None
-            self._client_sig_sk = None
-
-            self._tofu_lock = threading.Lock()
-            self._trusted_keys = {}
-            
-            self._key_dir = config.KEY_DIR
-            os.makedirs(self._key_dir, exist_ok=True)
-            self._initialized = True
+        self._tofu_lock = threading.Lock()
+        self._trusted_keys = {}
+        
+        self._key_dir = key_dir
+        self.sig_alg = sig_alg
+        os.makedirs(self._key_dir, exist_ok=True)
 
     def _get_or_generate_sig_keys(self, prefix: str) -> tuple[bytes, bytes]:
         sig_sec_file = os.path.join(self._key_dir, f"{prefix}_sig_sec.bin")
@@ -50,7 +39,7 @@ class KeyManager:
             with open(sig_pub_file, "rb") as f:
                 pk = f.read()
         else:
-            with oqs.Signature(config.SIG_ALG) as signer:
+            with oqs.Signature(self.sig_alg) as signer:
                 pk = signer.generate_keypair()
                 sk = signer.export_secret_key()
             
@@ -132,10 +121,4 @@ class KeyManager:
                 f.write(client_id)
             return client_id
 
-# 호환성을 위한 싱글톤 인스턴스의 래퍼 메서드 제공
-_instance = KeyManager()
-get_server_sig_keys = _instance.get_server_sig_keys
-get_client_sig_keys = _instance.get_client_sig_keys
-verify_and_trust_client = _instance.verify_and_trust_client
-verify_and_trust_server = _instance.verify_and_trust_server
-get_client_id = _instance.get_client_id
+

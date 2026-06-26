@@ -9,7 +9,7 @@ def test_misssign_test(dummy_file):
     파일 해시(file_hash)가 포함된 서명 데이터가 변조되었을 때 
     서버가 이를 감지하고 연결을 차단하는지 테스트합니다.
     """
-    client = PQCClient(dummy_file)
+    client = PQCClient.from_config(dummy_file)
     
     # 원래의 network.send_with_length 함수 저장
     original_send = network.send_with_length

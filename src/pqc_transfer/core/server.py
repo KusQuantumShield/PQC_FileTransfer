@@ -10,23 +10,23 @@ CLIENT_ID_PATTERN = re.compile(r'^[\w-]+$')
 
 from ..protocol import constants, chunk_stream, handshake, signature, metadata
 from .. import exceptions
-from ..utils import config, crypto, key_manager, logger, network
+from ..utils import logger, network
 
 class PQCServerHandler:
     """
     클라이언트 연결을 1:1로 처리하는 서버 프로토콜 핸들러
     각 단계(핸드셰이크, 파일 수신, 서명 검증 등)를 독립적인 메서드로 분리하여 유지보수성을 높였습니다.
     """
-    def __init__(self, conn: socket.socket, addr, file_save_lock: threading.Lock):
+    def __init__(self, conn: socket.socket, addr, file_save_lock: threading.Lock, save_dir: str, chunk_size: int, kem_alg: str, sig_alg: str, key_manager):
         self.conn = conn
         self.addr = addr
         self.file_save_lock = file_save_lock
-        self.session_key = None
+        self.save_dir = save_dir
+        self.chunk_size = chunk_size
+        self.kem_alg = kem_alg
+        self.sig_alg = sig_alg
+        self.key_manager = key_manager
         self.temp_path = None
-        self.temp_file = None
-        self.filename = None
-        self.original_filesize = 0
-        self.received_size = 0
         self.file_hasher = hashlib.sha256()
 
     def handle(self) -> bool:
@@ -45,11 +45,23 @@ class PQCServerHandler:
         """
         logger.log("INFO", "CONNECT", f"클라이언트가 연결되었습니다: {self.addr}")
         try:
-            if not self.perform_handshake(): return False
-            if not self.receive_metadata(): return False
-            if not self.receive_file_chunks(): return False
-            if not self.verify_signature(): return False
-            if not self.finalize_transfer(): return False
+            session_key = self.perform_handshake()
+            if not session_key: return False
+            
+            meta = self.receive_metadata()
+            if not meta: return False
+            client_id, filename, original_filesize = meta
+            
+            chunks_info = self.receive_file_chunks(session_key, original_filesize)
+            if not chunks_info: return False
+            temp_path, received_size = chunks_info
+            
+            if not self.verify_signature(client_id, filename, original_filesize, received_size, session_key): 
+                return False
+                
+            if not self.finalize_transfer(filename, temp_path): 
+                return False
+                
             return True
         except (ConnectionError, ConnectionResetError, BrokenPipeError) as e:
             logger.log("ERROR", "SERVER", f"클라이언트 연결 끊김: {e}")
@@ -77,54 +89,57 @@ class PQCServerHandler:
             pass
         return False
 
-    def perform_handshake(self) -> bool:
+    def perform_handshake(self) -> bytes | None:
         """[단계 1] 핸드셰이크: KEM 키 생성 및 교환"""
         try:
-            self.session_key = handshake.perform_server_handshake(self.conn)
-            return True
+            return handshake.perform_server_handshake(self.conn, self.kem_alg, self.sig_alg, self.key_manager)
         except Exception as e:
             logger.log("ERROR", "HANDSHAKE", str(e), exc_info=True)
-            return False
+            return None
 
-    def receive_metadata(self) -> bool:
+    def receive_metadata(self) -> tuple[str, str, int] | None:
         """
         [단계 2] 전송될 파일의 초기 메타데이터 수신
         """
         try:
-            self.client_id, self.filename, self.original_filesize = metadata.receive_metadata(self.conn)
-            return True
+            return metadata.receive_metadata(self.conn)
         except Exception as e:
             logger.log("ERROR", "METADATA", str(e))
-            return self.abort(str(e))
+            self.abort(str(e))
+            return None
 
-    def receive_file_chunks(self) -> bool:
+    def receive_file_chunks(self, session_key: bytes, original_filesize: int) -> tuple[str, int] | None:
         try:
-            receiver = chunk_stream.ChunkReceiver(self.conn, self.session_key, self.file_hasher)
-            self.temp_path, self.received_size = receiver.receive(self.original_filesize)
-            return True
+            receiver = chunk_stream.ChunkReceiver(self.conn, session_key, self.file_hasher, self.chunk_size)
+            temp_path, received_size = receiver.receive(original_filesize, self.save_dir)
+            self.temp_path = temp_path # cleanup에서 삭제할 수 있도록 저장
+            return temp_path, received_size
         except exceptions.PQCBaseError as e:
-            return self.abort(str(e))
+            self.abort(str(e))
+            return None
 
-    def verify_signature(self) -> bool:
+    def verify_signature(self, client_id: str, filename: str, original_filesize: int, received_size: int, session_key: bytes) -> bool:
         """[단계 4 & 5] 후반 메타데이터(해시) 수신 및 서명/무결성 검증"""
         challenge_nonce = "CHALLENGE_" + os.urandom(16).hex()
         
-        if not CLIENT_ID_PATTERN.match(self.client_id):
+        if not CLIENT_ID_PATTERN.match(client_id):
             logger.log("FAIL", "VERIFY", "유효하지 않은 클라이언트 ID 포맷입니다.")
             return self.abort("유효하지 않은 클라이언트 ID 포맷")
             
-        if self.received_size != self.original_filesize:
-            logger.log("FAIL", "FILE", f"파일 크기 불일치: 선언됨={self.original_filesize}, 수신됨={self.received_size}")
+        if received_size != original_filesize:
+            logger.log("FAIL", "FILE", f"파일 크기 불일치: 선언됨={original_filesize}, 수신됨={received_size}")
             return self.abort("불완전한 파일 전송 (크기 불일치)")
 
         is_valid = signature.verify_signature(
             self.conn,
-            self.client_id,
-            self.filename,
-            self.received_size,
-            self.session_key,
+            client_id,
+            filename,
+            received_size,
+            session_key,
             self.file_hasher.hexdigest(),
-            challenge_nonce
+            challenge_nonce,
+            self.sig_alg,
+            self.key_manager
         )
         if not is_valid:
             return self.abort("전자서명/해시 검증 실패")
@@ -133,7 +148,7 @@ class PQCServerHandler:
         logger.log("PASS", "VERIFY", "송신자 인증: 통과")
         return True
 
-    def finalize_transfer(self) -> bool:
+    def finalize_transfer(self, filename: str, temp_path: str) -> bool:
         """
         [단계 6] 클라이언트 종료 신호 대기 및 파일 자동 저장
         
@@ -148,12 +163,12 @@ class PQCServerHandler:
 
         logger.log("INFO", "TRANSFER", "CLIENT_DONE 신호 수신 완료")
 
-        target_dir = config.SAVE_DIR
-        base_name, ext = os.path.splitext(self.filename)
+        target_dir = self.save_dir
+        base_name, ext = os.path.splitext(filename)
         
         # 전역 락을 사용하여 파일 이름 중복 확인과 예약(선점)만 수행하여 임계 구역(Critical Section) 최소화
         with self.file_save_lock:
-            save_path = os.path.join(target_dir, self.filename)
+            save_path = os.path.join(target_dir, filename)
             counter = 1
             while os.path.exists(save_path):
                 save_path = os.path.join(target_dir, f"{base_name}({counter}){ext}")
@@ -162,7 +177,7 @@ class PQCServerHandler:
             open(save_path, 'a').close()
             
         # [최적화] 파일 이동(Move)은 파일 시스템에 따라 오래 걸릴 수 있으므로 락을 해제한 상태에서 병렬 처리합니다.
-        shutil.move(self.temp_path, save_path)
+        shutil.move(temp_path, save_path)
         self.temp_path = None
 
         logger.log("RESULT", "TRANSFER", f"파일이 자동으로 저장됨: {save_path}")
@@ -203,9 +218,35 @@ class PQCServer:
     PQC 파일 전송 서버의 전체 라이프사이클을 관리하는 클래스
     소켓 바인딩, 리스닝, 스레드 풀 할당 및 PQCServerHandler 생성을 담당합니다.
     """
-    def __init__(self, host: str, port: int, max_concurrent_clients: int = 100):
+    
+    @classmethod
+    def from_config(cls, host: str | None = None, port: int | None = None):
+        """
+        환경 변수 및 기본 설정(config.py)을 기반으로 서버를 손쉽게 생성하는 팩토리 메서드입니다.
+        이를 통해 DI 구조를 유지하면서도 호출부의 복잡도를 낮추어 유지보수성을 향상시킵니다.
+        """
+        from ..utils import config
+        from ..utils.key_manager import KeyManager
+        
+        km = KeyManager(key_dir=config.KEY_DIR, sig_alg=config.SIG_ALG)
+        return cls(
+            host=host if host is not None else config.HOST,
+            port=port if port is not None else config.PORT,
+            save_dir=config.SAVE_DIR,
+            chunk_size=config.CHUNK_SIZE,
+            kem_alg=config.KEM_ALG,
+            sig_alg=config.SIG_ALG,
+            key_manager=km
+        )
+        
+    def __init__(self, host: str, port: int, save_dir: str, chunk_size: int, kem_alg: str, sig_alg: str, key_manager, max_concurrent_clients: int = 100):
         self.host = host
         self.port = port
+        self.save_dir = save_dir
+        self.chunk_size = chunk_size
+        self.kem_alg = kem_alg
+        self.sig_alg = sig_alg
+        self.key_manager = key_manager
         self.max_concurrent_clients = max_concurrent_clients
         self.file_save_lock = threading.Lock()
         
@@ -236,7 +277,7 @@ class PQCServer:
                     network.configure_socket(conn, is_server=False)
                     conn.settimeout(constants.DEFAULT_SOCKET_TIMEOUT)
                     
-                    handler = PQCServerHandler(conn, addr, self.file_save_lock)
+                    handler = PQCServerHandler(conn, addr, self.file_save_lock, self.save_dir, self.chunk_size, self.kem_alg, self.sig_alg, self.key_manager)
                     
                     def handle_client(h):
                         try:

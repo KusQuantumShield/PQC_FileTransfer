@@ -7,7 +7,7 @@ def test_successful_transfer(dummy_file):
     정상적인 조건에서 클라이언트가 서버로 파일을 전송했을 때,
     파일이 변조 없이 원본과 동일하게 서버에 저장되는지 검증하는 Happy Path 테스트입니다.
     """
-    client = PQCClient(dummy_file)
+    client = PQCClient.from_config(dummy_file)
     client.transfer()
     
     from pqc_transfer.utils import config

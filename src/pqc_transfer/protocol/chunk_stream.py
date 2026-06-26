@@ -12,10 +12,11 @@ from .. import exceptions
 from ..utils import config, logger, network
 
 class ChunkSender:
-    def __init__(self, sock: socket.socket, session_key: bytes, file_hasher: typing.Any) -> None:
+    def __init__(self, sock: socket.socket, session_key: bytes, file_hasher: typing.Any, chunk_size: int = 4 * 1024 * 1024) -> None:
         self.sock = sock
         self.aesgcm = AESGCM(session_key)
         self.file_hasher = file_hasher
+        self.chunk_size = chunk_size
         
         self.header_struct = struct.Struct(constants.HEADER_FORMAT)
         self.nonce_struct = struct.Struct(constants.NONCE_PREFIX_FORMAT)
@@ -39,13 +40,13 @@ class ChunkSender:
         use_compression = self._should_compress(filename)
         compressor = zlib.compressobj(level=1, wbits=15, memLevel=9) if use_compression else None
         
-        buffer = bytearray(config.CHUNK_SIZE)
+        buffer = bytearray(self.chunk_size)
         buffer_view = memoryview(buffer)
         
         chunk_index = 0
         sent_size = 0
         
-        logger.log("INFO", "CHUNK", f"청크 크기: {config.CHUNK_SIZE} 바이트")
+        logger.log("INFO", "CHUNK", f"청크 크기: {self.chunk_size} 바이트")
         logger.log("INFO", "CHUNK", "청크 전송 시작")
         transfer_start_time = time.perf_counter()
 
@@ -96,13 +97,14 @@ class ChunkSender:
 
 
 class ChunkReceiver:
-    def __init__(self, conn: socket.socket, session_key: bytes, file_hasher: typing.Any) -> None:
+    def __init__(self, conn: socket.socket, session_key: bytes, file_hasher: typing.Any, chunk_size: int = 4 * 1024 * 1024) -> None:
         self.conn = conn
         self.aesgcm = AESGCM(session_key)
         self.file_hasher = file_hasher
+        self.chunk_size = chunk_size
         
         self.decompressor = zlib.decompressobj()
-        self.max_payload_size = config.CHUNK_SIZE * 2
+        self.max_payload_size = self.chunk_size * 2
         self.recv_buffer = bytearray(self.max_payload_size)
         self.recv_view = memoryview(self.recv_buffer)
         
@@ -110,8 +112,7 @@ class ChunkReceiver:
         self.header_buffer = bytearray(constants.HEADER_SIZE)
         self.header_view = memoryview(self.header_buffer)
 
-    def receive(self, original_filesize: int) -> tuple[str, int]:
-        save_dir = config.SAVE_DIR
+    def receive(self, original_filesize: int, save_dir: str) -> tuple[str, int]:
         os.makedirs(save_dir, exist_ok=True)
         temp_file = tempfile.NamedTemporaryFile(dir=save_dir, delete=False)
         temp_path = temp_file.name

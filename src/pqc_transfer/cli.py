@@ -3,7 +3,7 @@ import sys
 import os
 
 from .core.client import PQCClient
-from .utils import config, logger
+from .utils import config, logger, key_manager
 from .ui import gui
 
 
@@ -21,9 +21,9 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
     port = port if port is not None else config.PORT
 
     _log_initialization("서버")
-
     from .core.server import PQCServer
-    server = PQCServer(host, port)
+    
+    server = PQCServer.from_config(host=host, port=port)
     server.start()
 
 
@@ -33,25 +33,24 @@ def run_client(file_path: str | None = None) -> None:
     초기 설정을 로깅하고, 사용자로부터 전송할 파일을 선택받아 PQCClient 인스턴스를 실행합니다.
     """
     _log_initialization("클라이언트")
-
+    
     if not file_path:
-        file_path = gui.select_file()
-
-    if not file_path:
-        logger.log("INFO", "FILE", "사용자가 파일 선택을 취소했습니다")
+        # CLI에서 파일 경로 없이 실행 시 더 이상 GUI 폴더 선택창을 띄우지 않고 명시적인 에러 반환 (관심사 분리)
+        logger.log("ERROR", "CLI", "전송할 파일 경로가 지정되지 않았습니다. 사용법: python -m pqc_transfer client <파일경로>")
         return
-
+        
     if not os.path.isfile(file_path):
-        logger.log("ERROR", "FILE", f"파일을 찾을 수 없거나 디렉토리입니다: {file_path}")
-        gui.show_error("파일 오류", f"유효한 파일이 아닙니다.\n\n{file_path}")
+        logger.log("ERROR", "CLI", f"파일을 찾을 수 없습니다: {file_path}")
         return
 
     try:
-        client = PQCClient(file_path)
+        from .core.client import PQCClient
+        
+        client = PQCClient.from_config(file_path=file_path)
         client.transfer()
-        gui.show_info("전송 완료", f"파일 전송이 완료되었습니다.\n\n{client.filename}")
+        logger.log("INFO", "CLI", f"파일 전송이 완료되었습니다: {client.filename}")
     except Exception as e:
-        gui.show_error("전송 실패", str(e))
+        logger.log("ERROR", "CLI", f"전송 실패: {str(e)}")
         sys.exit(1)
 
 

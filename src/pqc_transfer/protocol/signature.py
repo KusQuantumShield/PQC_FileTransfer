@@ -11,7 +11,7 @@ def _build_metadata_payload(client_id: str, filename: str, filesize: int, file_h
     session_key_hash = crypto.hash_ss(session_key)
     return f"{client_id}|{filename}|{filesize}|{file_hash}|{session_key_hash}|{challenge_nonce}".encode("utf-8")
 
-def create_and_send_signature(sock: socket.socket, file_hash: str, client_id: str, filename: str, sent_size: int, session_key: bytes) -> None:
+def create_and_send_signature(sock: socket.socket, file_hash: str, client_id: str, filename: str, sent_size: int, session_key: bytes, sig_alg: str, km) -> None:
     """
     클라이언트 관점의 데이터 서명 및 전송
     """
@@ -26,9 +26,9 @@ def create_and_send_signature(sock: socket.socket, file_hash: str, client_id: st
 
     sign_start_time = time.perf_counter()
     
-    sig_public_key, secret_key = key_manager.get_client_sig_keys()
+    sig_public_key, secret_key = km.get_client_sig_keys()
     
-    with oqs.Signature(config.SIG_ALG, secret_key=secret_key) as signer:
+    with oqs.Signature(sig_alg, secret_key=secret_key) as signer:
         signature = signer.sign(metadata_for_sign)
         
     sign_end_time = time.perf_counter()
@@ -43,7 +43,7 @@ def create_and_send_signature(sock: socket.socket, file_hash: str, client_id: st
     network.send_with_length(sock, signature)
     logger.log("INFO", "SIGN", "서명 전송 완료")
 
-def verify_signature(conn: socket.socket, client_id: str, filename: str, received_size: int, session_key: bytes, file_hash: str, challenge_nonce: str) -> bool:
+def verify_signature(conn: socket.socket, client_id: str, filename: str, received_size: int, session_key: bytes, file_hash: str, challenge_nonce: str, sig_alg: str, km) -> bool:
     """
     서버 관점의 클라이언트 서명 검증
     """
@@ -59,7 +59,7 @@ def verify_signature(conn: socket.socket, client_id: str, filename: str, receive
 
     sig_public_key = network.recv_with_length(conn, max_len=constants.MAX_SIG_KEY_LEN)
     
-    if not key_manager.verify_and_trust_client(client_id, sig_public_key):
+    if not km.verify_and_trust_client(client_id, sig_public_key):
         logger.log("FAIL", "VERIFY", "등록되지 않은 송신자의 공개키입니다 (MitM 또는 공격 의심)")
         network.send_with_length(conn, b"ERROR:UNTRUSTED_CLIENT")
         return False
@@ -70,7 +70,7 @@ def verify_signature(conn: socket.socket, client_id: str, filename: str, receive
     
     metadata_for_verify = _build_metadata_payload(client_id, filename, received_size, file_hash, session_key, challenge_nonce)
 
-    with oqs.Signature(config.SIG_ALG) as verifier:
+    with oqs.Signature(sig_alg) as verifier:
         expected_sig_pk_len = verifier.details['length_public_key']
         expected_sig_len = verifier.details['length_signature']
         
