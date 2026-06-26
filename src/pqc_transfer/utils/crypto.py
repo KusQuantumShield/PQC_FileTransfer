@@ -29,3 +29,29 @@ def derive_key(shared_secret: bytes) -> bytes:
     )
     # 초기화된 HKDF 객체를 사용하여 원본 공유 비밀키로부터 최종 세션 키를 도출 및 반환
     return hkdf.derive(shared_secret)
+
+def sha256_file(file_path: str, chunk_size: int = 1024 * 1024) -> str:
+    """
+    지정된 경로의 파일에 대해 SHA-256 해시를 계산하여 16진수 문자열로 반환합니다.
+    대용량 파일(예: 수 GB)을 한 번에 메모리에 올리면 MemoryError(OOM)가 발생할 수 있으므로,
+    chunk_size 단위로 나누어 읽거나 Python 3.11+ 의 빠른 file_digest를 활용합니다.
+    """
+    if hasattr(hashlib, 'file_digest'):
+        with open(file_path, "rb") as f:
+            return hashlib.file_digest(f, "sha256").hexdigest()
+            
+    # hashlib 라이브러리의 sha256 해시 객체 초기화
+    h = hashlib.sha256()
+    # 메모리 복사본 생성을 방지하기 위해 고정 크기(CHUNK_SIZE) 버퍼와 memoryview 활용 (Zero-copy 최적화)
+    buffer = bytearray(chunk_size)
+    view = memoryview(buffer)
+    # 파일을 바이너리 읽기 모드("rb")로 엽니다.
+    with open(file_path, "rb") as f:
+        while True:
+            bytes_read = f.readinto(buffer)
+            if not bytes_read:
+                break
+            # 읽어온 실제 조각만큼만 memoryview로 슬라이싱하여 해시 누적(update)
+            h.update(view[:bytes_read])
+    # 최종적으로 누적 계산된 해시값을 16진수 문자열 형식으로 반환합니다.
+    return h.hexdigest()

@@ -1,81 +1,73 @@
 import logging
 import sys
-from logging.handlers import RotatingFileHandler
+import queue
+import atexit
+import threading
+from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 
-# 터미널 출력을 위한 ANSI 색상 코드 정의
 _COLORS = {
-    "INFO": "\033[94m",    # 파란색 (일반적인 진행 상태)
-    "PASS": "\033[92m",    # 녹색 (검증 성공, 완료)
-    "RESULT": "\033[96m",  # 청록색 (최종 결과)
-    "WARN": "\033[93m",    # 노란색 (경고)
-    "FAIL": "\033[91m",    # 빨간색 (검증 실패, 차단)
-    "ERROR": "\033[91m",   # 빨간색 (시스템 에러, 예외)
-    "RESET": "\033[0m"     # 색상 초기화
+    "INFO": "\033[94m",
+    "PASS": "\033[92m",
+    "RESULT": "\033[96m",
+    "WARN": "\033[93m",
+    "FAIL": "\033[91m",
+    "ERROR": "\033[91m",
+    "RESET": "\033[0m"
 }
 
-# 기본 로거 인스턴스 생성
-_logger = logging.getLogger("PQC_APP")
-_logger.setLevel(logging.DEBUG)
+class ColorFormatter(logging.Formatter):
+    def format(self, record):
+        level_name = getattr(record, 'custom_level', 'INFO')
+        module_name = getattr(record, 'module_name', 'SYSTEM')
+        color = _COLORS.get(level_name, _COLORS["RESET"])
+        reset = _COLORS["RESET"]
+        return f"{color}[{level_name}][{module_name}]{reset} {record.getMessage()}"
 
-# 중복 핸들러 추가 방지를 위한 체크
-if not _logger.handlers:
-    import queue
-    import atexit
-    from logging.handlers import QueueHandler, QueueListener
-
-    # 1. 터미널(Console) 출력 핸들러: 색상을 적용한 직관적인 포맷
-    class ColorFormatter(logging.Formatter):
-        def format(self, record):
-            level_name = getattr(record, 'custom_level', 'INFO')
-            module_name = getattr(record, 'module_name', 'SYSTEM')
-            color = _COLORS.get(level_name, _COLORS["RESET"])
-            reset = _COLORS["RESET"]
-            # 예: [INFO][KEM] Public key sent
-            return f"{color}[{level_name}][{module_name}]{reset} {record.getMessage()}"
-
-    _console_handler = logging.StreamHandler(sys.stdout)
-    _console_handler.setFormatter(ColorFormatter())
-
-    # 2. 파일 출력 핸들러: 파일에는 색상 코드를 빼고 타임스탬프를 추가하여 기록
-    # 파일명: pqc_transfer.log (스크립트 실행 위치에 생성됨)
-    # 악의적인 다량 접속으로 인한 디스크 고갈(Log Flooding DoS)을 막기 위해 롤링 파일 핸들러 적용
-    _file_handler = RotatingFileHandler(
-        "pqc_transfer.log", 
-        maxBytes=10 * 1024 * 1024, # 최대 10MB
-        backupCount=5,             # 백업 파일 최대 5개 유지
-        encoding="utf-8"
-    )
-    _file_formatter = logging.Formatter('%(asctime)s [%(custom_level)s][%(module_name)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-    _file_handler.setFormatter(_file_formatter)
-
-    # 3. 비동기 로깅 큐 적용 (최적화)
-    # 서버 환경에서 파일/콘솔 I/O 병목으로 인해 네트워크 및 암호화 스레드가 지연되는 것을 방지합니다.
-    _log_queue = queue.Queue(-1)
-    _queue_handler = QueueHandler(_log_queue)
-    _logger.addHandler(_queue_handler)
-
-    # 큐의 이벤트를 백그라운드 스레드에서 처리하여 핸들러들에게 전달합니다.
-    _listener = QueueListener(_log_queue, _console_handler, _file_handler)
-    _listener.start()
-
-    # 프로세스 정상 종료 시 큐 리스너를 안전하게 종료하여 남은 로그를 모두 기록하도록 보장합니다.
-    atexit.register(_listener.stop)
-
-
-def log(level: str, module: str, message: str, exc_info: bool = False):
+class PQCLogger:
     """
-    구조화된 로그를 터미널에 컬러로 출력하고 동시에 파일(pqc_transfer.log)에 안전하게 저장합니다.
-    기존의 단순한 print 기반 코드를 수정하지 않고도, 모듈별/수준별 로깅을 지원하기 위해 설계된 래퍼 함수입니다.
-    
-    Args:
-        level (str): "INFO", "PASS", "ERROR", "FAIL", "RESULT" 등 현재 로그의 상태
-        module (str): "KEM", "FILE", "SIGN", "CONNECT", "CHUNK" 등 작업이 발생한 논리적 모듈 태그
-        message (str): 실제 출력/저장할 핵심 로그 내용
-        exc_info (bool): True일 경우 파이썬 Exception의 Traceback(스택 트레이스) 정보도 함께 출력/기록 (디버깅용)
+    PQC 전송 앱용 로거를 객체 지향적으로 관리합니다.
     """
-    # 내부적으로 에러 관련 로그("ERROR", "FAIL")와 일반 정보성 로그를 구분하여 파이썬 표준 로거에 전달합니다.
-    log_level = logging.ERROR if level in ["ERROR", "FAIL"] else logging.INFO
+    _instance = None
+    _instance_lock = threading.Lock()
     
-    # extra 인자를 통해 custom_level과 module_name을 전달하여, 위에서 정의한 ColorFormatter와 
-    # _file_formatter가 해당 값을 추출해 포맷팅(예: [INFO][KEM] 메세지)할 수 있도록 합니다.
-    _logger.log(log_level, message, extra={"custom_level": level, "module_name": module}, exc_info=exc_info)
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            with cls._instance_lock:
+                if not cls._instance:
+                    cls._instance = super(PQCLogger, cls).__new__(cls)
+        return cls._instance
+        
+    def __init__(self):
+        if not hasattr(self, '_initialized'):
+            self._logger = logging.getLogger("PQC_APP")
+            self._logger.setLevel(logging.DEBUG)
+            
+            if not self._logger.handlers:
+                self._console_handler = logging.StreamHandler(sys.stdout)
+                self._console_handler.setFormatter(ColorFormatter())
+                
+                self._file_handler = RotatingFileHandler(
+                    "pqc_transfer.log", 
+                    maxBytes=10 * 1024 * 1024,
+                    backupCount=5,
+                    encoding="utf-8"
+                )
+                self._file_formatter = logging.Formatter('%(asctime)s [%(custom_level)s][%(module_name)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+                self._file_handler.setFormatter(self._file_formatter)
+                
+                self._log_queue = queue.Queue(-1)
+                self._queue_handler = QueueHandler(self._log_queue)
+                self._logger.addHandler(self._queue_handler)
+                
+                self._listener = QueueListener(self._log_queue, self._console_handler, self._file_handler)
+                self._listener.start()
+                
+                atexit.register(self._listener.stop)
+            self._initialized = True
+            
+    def log(self, level: str, module: str, message: str, exc_info: bool = False):
+        log_level = logging.ERROR if level in ["ERROR", "FAIL"] else logging.INFO
+        self._logger.log(log_level, message, extra={"custom_level": level, "module_name": module}, exc_info=exc_info)
+
+_logger_instance = PQCLogger()
+log = _logger_instance.log

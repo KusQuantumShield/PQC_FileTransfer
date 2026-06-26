@@ -1,6 +1,5 @@
 import os
 import sys
-import hashlib
 
 try:
     import tkinter as tk
@@ -9,34 +8,8 @@ try:
 except ImportError:
     HAS_TKINTER = False
 
-from .config import CHUNK_SIZE
-from .logger import log
+from ..utils.logger import log
 
-def sha256_file(file_path: str) -> str:
-    """
-    지정된 경로의 파일에 대해 SHA-256 해시를 계산하여 16진수 문자열로 반환합니다.
-    대용량 파일(예: 수 GB)을 한 번에 메모리에 올리면 MemoryError(OOM)가 발생할 수 있으므로,
-    CHUNK_SIZE 단위로 나누어 읽거나 Python 3.11+ 의 빠른 file_digest를 활용합니다.
-    """
-    if hasattr(hashlib, 'file_digest'):
-        with open(file_path, "rb") as f:
-            return hashlib.file_digest(f, "sha256").hexdigest()
-            
-    # hashlib 라이브러리의 sha256 해시 객체 초기화
-    h = hashlib.sha256()
-    # 메모리 복사본 생성을 방지하기 위해 고정 크기(CHUNK_SIZE) 버퍼와 memoryview 활용 (Zero-copy 최적화)
-    buffer = bytearray(CHUNK_SIZE)
-    view = memoryview(buffer)
-    # 파일을 바이너리 읽기 모드("rb")로 엽니다.
-    with open(file_path, "rb") as f:
-        while True:
-            bytes_read = f.readinto(buffer)
-            if not bytes_read:
-                break
-            # 읽어온 실제 조각만큼만 memoryview로 슬라이싱하여 해시 누적(update)
-            h.update(view[:bytes_read])
-    # 최종적으로 누적 계산된 해시값을 16진수 문자열 형식으로 반환합니다.
-    return h.hexdigest()
 
 def _get_tk_root():
     """
@@ -48,9 +21,13 @@ def _get_tk_root():
     root.attributes("-topmost", True) # 생성되는 다이얼로그가 항상 다른 창 위에 표시되도록 설정
     return root
 
+def _can_use_gui() -> bool:
+    """GUI 환경(tkinter) 사용 가능 여부를 공통으로 확인하는 유틸리티 함수"""
+    return HAS_TKINTER and (sys.platform == "win32" or bool(os.environ.get("DISPLAY")))
+
 def select_file() -> str:
     """사용자가 전송할 파일을 탐색기를 통해 직접 선택할 수 있도록 다이얼로그를 띄움"""
-    if not HAS_TKINTER or (sys.platform != "win32" and not os.environ.get("DISPLAY")):
+    if not _can_use_gui():
         log("ERROR", "GUI", "GUI 환경(tkinter)을 사용할 수 없습니다. 명령줄 인자를 사용하세요 (예: python3 client.py <파일명>)")
         return ""
         
@@ -67,7 +44,7 @@ def select_save_directory(filename: str) -> str:
     서버 측에서 수신된 파일을 저장할 폴더를 선택하는 다이얼로그를 띄움
     GUI 환경이 아닌 경우(Headless 서버 등)를 대비한 예외 처리도 포함되어 있음
     """
-    if not HAS_TKINTER or (sys.platform != "win32" and not os.environ.get("DISPLAY")):
+    if not _can_use_gui():
         log("WARN", "GUI", "GUI 없음 모드: 기본 수신 폴더에 저장합니다.")
         return ""
     
@@ -79,7 +56,7 @@ def select_save_directory(filename: str) -> str:
 
 def show_info(title: str, message: str) -> None:
     """정보 전달용 알림 팝업(Info MessageBox)을 띄움. GUI가 없으면 콘솔에 출력"""
-    if not HAS_TKINTER or (sys.platform != "win32" and not os.environ.get("DISPLAY")):
+    if not _can_use_gui():
         log("INFO", "POPUP", f"{title} - {message.replace(chr(10), ' ')}")
         return
     root = _get_tk_root()
@@ -88,7 +65,7 @@ def show_info(title: str, message: str) -> None:
 
 def show_error(title: str, message: str) -> None:
     """오류 발생 시 에러 팝업(Error MessageBox)을 띄움. GUI가 없으면 콘솔에 출력"""
-    if not HAS_TKINTER or (sys.platform != "win32" and not os.environ.get("DISPLAY")):
+    if not _can_use_gui():
         log("ERROR", "POPUP", f"{title} - {message.replace(chr(10), ' ')}")
         return
     root = _get_tk_root()

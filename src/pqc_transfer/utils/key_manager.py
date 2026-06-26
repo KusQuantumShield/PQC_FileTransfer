@@ -1,157 +1,141 @@
 import os
-import threading
 import stat
+import threading
+import uuid
+
 import oqs
 
 from . import config
 from . import logger
 
-_server_sig_lock = threading.Lock()
-_server_sig_pk = None
-_server_sig_sk = None
-
-_client_sig_lock = threading.Lock()
-_client_sig_pk = None
-_client_sig_sk = None
-
-_tofu_lock = threading.Lock()
-TRUSTED_KEYS = {}
-
-def get_server_sig_keys():
+class KeyManager:
     """
-    서버의 서명용 공개키(Public Key) 및 비밀키(Secret Key) 쌍을 로드하거나 새로 생성합니다.
+    PQC 서명 키 및 클라이언트/서버 신원 정보를 중앙에서 안전하게 관리하는 클래스입니다.
+    기존의 전역 변수 구조에서 탈피하여 객체 지향적인 Singleton/Instance 형태로 관리할 수 있습니다.
     """
-    global _server_sig_pk, _server_sig_sk
-    
-    if _server_sig_pk is not None:
-        return _server_sig_pk, _server_sig_sk
-        
-    with _server_sig_lock:
-        if _server_sig_pk is not None:
-            return _server_sig_pk, _server_sig_sk
+    _instance = None
+    _instance_lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            with cls._instance_lock:
+                if not cls._instance:
+                    cls._instance = super(KeyManager, cls).__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if not hasattr(self, '_initialized'):
+            self._server_sig_lock = threading.Lock()
+            self._server_sig_pk = None
+            self._server_sig_sk = None
+
+            self._client_sig_lock = threading.Lock()
+            self._client_sig_pk = None
+            self._client_sig_sk = None
+
+            self._tofu_lock = threading.Lock()
+            self._trusted_keys = {}
             
-        server_key_dir = os.path.expanduser("~/.pqc_transfer_keys")
-        os.makedirs(server_key_dir, exist_ok=True)
-        
-        sig_sec_file = os.path.join(server_key_dir, "server_sig_sec.bin")
-        sig_pub_file = os.path.join(server_key_dir, "server_sig_pub.bin")
+            self._key_dir = config.KEY_DIR
+            os.makedirs(self._key_dir, exist_ok=True)
+            self._initialized = True
+
+    def _get_or_generate_sig_keys(self, prefix: str) -> tuple[bytes, bytes]:
+        sig_sec_file = os.path.join(self._key_dir, f"{prefix}_sig_sec.bin")
+        sig_pub_file = os.path.join(self._key_dir, f"{prefix}_sig_pub.bin")
         
         if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
             with open(sig_sec_file, "rb") as f:
-                _server_sig_sk = f.read()
+                sk = f.read()
             with open(sig_pub_file, "rb") as f:
-                _server_sig_pk = f.read()
+                pk = f.read()
         else:
             with oqs.Signature(config.SIG_ALG) as signer:
-                _server_sig_pk = signer.generate_keypair()
-                _server_sig_sk = signer.export_secret_key()
+                pk = signer.generate_keypair()
+                sk = signer.export_secret_key()
             
             fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
             with os.fdopen(fd, "wb") as f:
-                f.write(_server_sig_sk)
+                f.write(sk)
             
             with open(sig_pub_file, "wb") as f:
-                f.write(_server_sig_pk)
+                f.write(pk)
                 
-        return _server_sig_pk, _server_sig_sk
+        return pk, sk
 
-def get_client_sig_keys():
-    """
-    클라이언트의 서명용 공개키(Public Key) 및 비밀키(Secret Key) 쌍을 로드하거나 새로 생성합니다.
-    """
-    global _client_sig_pk, _client_sig_sk
-    
-    if _client_sig_pk is not None:
-        return _client_sig_pk, _client_sig_sk
-        
-    with _client_sig_lock:
-        if _client_sig_pk is not None:
-            return _client_sig_pk, _client_sig_sk
+    def get_server_sig_keys(self) -> tuple[bytes, bytes]:
+        if self._server_sig_pk is not None:
+            return self._server_sig_pk, self._server_sig_sk
             
-        key_dir = os.path.expanduser("~/.pqc_transfer_keys")
-        os.makedirs(key_dir, exist_ok=True)
-        
-        sig_sec_file = os.path.join(key_dir, "client_sig_sec.bin")
-        sig_pub_file = os.path.join(key_dir, "client_sig_pub.bin")
-        
-        if os.path.exists(sig_sec_file) and os.path.exists(sig_pub_file):
-            with open(sig_sec_file, "rb") as f:
-                _client_sig_sk = f.read()
-            with open(sig_pub_file, "rb") as f:
-                _client_sig_pk = f.read()
-        else:
-            with oqs.Signature(config.SIG_ALG) as signer:
-                _client_sig_pk = signer.generate_keypair()
-                _client_sig_sk = signer.export_secret_key()
+        with self._server_sig_lock:
+            if self._server_sig_pk is not None:
+                return self._server_sig_pk, self._server_sig_sk
                 
-            fd = os.open(sig_sec_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
-            with os.fdopen(fd, "wb") as f:
-                f.write(_client_sig_sk)
-                
-            with open(sig_pub_file, "wb") as f:
-                f.write(_client_sig_pk)
-                
-        return _client_sig_pk, _client_sig_sk
+            self._server_sig_pk, self._server_sig_sk = self._get_or_generate_sig_keys("server")
+            return self._server_sig_pk, self._server_sig_sk
 
-def verify_and_trust_client(client_id: str, sig_public_key: bytes) -> bool:
-    """
-    TOFU 기반으로 클라이언트의 공개키를 검증하고 신뢰 목록에 등록합니다.
-    """
-    client_id_dir = os.path.expanduser("~/.pqc_transfer_keys")
-    os.makedirs(client_id_dir, exist_ok=True)
-    trusted_client_file = os.path.join(client_id_dir, f"trusted_client_sig_{client_id}.bin")
+    def get_client_sig_keys(self) -> tuple[bytes, bytes]:
+        if self._client_sig_pk is not None:
+            return self._client_sig_pk, self._client_sig_sk
+            
+        with self._client_sig_lock:
+            if self._client_sig_pk is not None:
+                return self._client_sig_pk, self._client_sig_sk
+                
+            self._client_sig_pk, self._client_sig_sk = self._get_or_generate_sig_keys("client")
+            return self._client_sig_pk, self._client_sig_sk
 
-    with _tofu_lock:
-        if client_id in TRUSTED_KEYS:
-            trusted_pub = TRUSTED_KEYS[client_id]
-            if trusted_pub != sig_public_key:
-                return False
-        else:
-            if os.path.exists(trusted_client_file):
-                with open(trusted_client_file, "rb") as f:
-                    trusted_pub = f.read()
+    def verify_and_trust_client(self, client_id: str, sig_public_key: bytes) -> bool:
+        trusted_client_file = os.path.join(self._key_dir, f"trusted_client_sig_{client_id}.bin")
+
+        with self._tofu_lock:
+            if client_id in self._trusted_keys:
+                trusted_pub = self._trusted_keys[client_id]
                 if trusted_pub != sig_public_key:
                     return False
-                TRUSTED_KEYS[client_id] = trusted_pub
             else:
-                with open(trusted_client_file, "wb") as f:
-                    f.write(sig_public_key)
-                TRUSTED_KEYS[client_id] = sig_public_key
-                logger.log("INFO", "VERIFY", f"새로운 클라이언트({client_id[:8]}) 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
-    return True
+                if os.path.exists(trusted_client_file):
+                    with open(trusted_client_file, "rb") as f:
+                        trusted_pub = f.read()
+                    if trusted_pub != sig_public_key:
+                        return False
+                    self._trusted_keys[client_id] = trusted_pub
+                else:
+                    with open(trusted_client_file, "wb") as f:
+                        f.write(sig_public_key)
+                    self._trusted_keys[client_id] = sig_public_key
+                    logger.log("INFO", "VERIFY", f"새로운 클라이언트({client_id[:8]}) 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
+        return True
 
-def verify_and_trust_server(server_ip: str, server_sig_pk: bytes) -> bool:
-    """
-    TOFU 기반으로 서버의 서명 공개키를 검증하고 신뢰 목록에 등록합니다.
-    """
-    server_id_dir = os.path.expanduser("~/.pqc_transfer_keys")
-    os.makedirs(server_id_dir, exist_ok=True)
-    trusted_server_file = os.path.join(server_id_dir, f"trusted_server_sig_{server_ip}.bin")
-    
-    if os.path.exists(trusted_server_file):
-        with open(trusted_server_file, "rb") as f:
-            trusted_pub = f.read()
-        if trusted_pub != server_sig_pk:
-            return False
-    else:
-        with open(trusted_server_file, "wb") as f:
-            f.write(server_sig_pk)
-        logger.log("INFO", "VERIFY", "새로운 서버의 서명 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
-    return True
+    def verify_and_trust_server(self, server_ip: str, server_sig_pk: bytes) -> bool:
+        trusted_server_file = os.path.join(self._key_dir, f"trusted_server_sig_{server_ip}.bin")
+        
+        if os.path.exists(trusted_server_file):
+            with open(trusted_server_file, "rb") as f:
+                trusted_pub = f.read()
+            if trusted_pub != server_sig_pk:
+                return False
+        else:
+            with open(trusted_server_file, "wb") as f:
+                f.write(server_sig_pk)
+            logger.log("INFO", "VERIFY", "새로운 서버의 서명 공개키를 신뢰 목록에 등록했습니다 (TOFU)")
+        return True
 
-def get_client_id() -> str:
-    """
-    클라이언트 고유 식별자(UUID)를 생성하거나 불러옵니다.
-    """
-    import uuid
-    key_dir = os.path.expanduser("~/.pqc_transfer_keys")
-    os.makedirs(key_dir, exist_ok=True)
-    id_file = os.path.join(key_dir, "client_id.txt")
-    if os.path.exists(id_file):
-        with open(id_file, "r") as f:
-            return f.read().strip()
-    else:
-        client_id = str(uuid.uuid4())
-        with open(id_file, "w") as f:
-            f.write(client_id)
-        return client_id
+    def get_client_id(self) -> str:
+        id_file = os.path.join(self._key_dir, "client_id.txt")
+        if os.path.exists(id_file):
+            with open(id_file, "r") as f:
+                return f.read().strip()
+        else:
+            client_id = str(uuid.uuid4())
+            with open(id_file, "w") as f:
+                f.write(client_id)
+            return client_id
+
+# 호환성을 위한 싱글톤 인스턴스의 래퍼 메서드 제공
+_instance = KeyManager()
+get_server_sig_keys = _instance.get_server_sig_keys
+get_client_sig_keys = _instance.get_client_sig_keys
+verify_and_trust_client = _instance.verify_and_trust_client
+verify_and_trust_server = _instance.verify_and_trust_server
+get_client_id = _instance.get_client_id
