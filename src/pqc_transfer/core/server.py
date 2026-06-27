@@ -1,0 +1,256 @@
+import os
+import socket
+import struct
+import shutil
+import hashlib
+import threading
+import re
+
+CLIENT_ID_PATTERN = re.compile(r'^[\w-]+$')
+
+from ..protocol import constants, chunk_stream, handshake, signature, metadata
+from .. import exceptions
+from ..utils import config, crypto, key_manager, logger, network
+
+class PQCServerHandler:
+    """
+    클라이언트 연결을 1:1로 처리하는 서버 프로토콜 핸들러
+    각 단계(핸드셰이크, 파일 수신, 서명 검증 등)를 독립적인 메서드로 분리하여 유지보수성을 높였습니다.
+    """
+    def __init__(self, conn: socket.socket, addr, file_save_lock: threading.Lock):
+        self.conn = conn
+        self.addr = addr
+        self.file_save_lock = file_save_lock
+        self.session_key = None
+        self.temp_path = None
+        self.temp_file = None
+        self.filename = None
+        self.original_filesize = 0
+        self.received_size = 0
+        self.file_hasher = hashlib.sha256()
+
+    def handle(self) -> bool:
+        """
+        단일 클라이언트와의 모든 통신 과정을 순차적으로 관리하는 메인 제어 메서드입니다.
+        
+        [처리 순서]
+        1. 핸드셰이크 (KEM 공개키 송신 및 암호문 수신을 통한 세션 키 교환)
+        2. 메타데이터 수신 (파일명 및 크기)
+        3. 파일 데이터 청크 수신 (AES-GCM 복호화 및 실시간 압축 해제, 파일 저장)
+        4. 서명 및 무결성 검증 (해시 대조 및 PQC 전자서명 검증)
+        5. 전송 마무리 (임시 파일을 실제 파일로 이동 및 정리)
+        
+        Returns:
+            bool: 모든 과정이 성공적으로 완료되면 True, 예외가 발생하거나 실패하면 False
+        """
+        logger.log("INFO", "CONNECT", f"클라이언트가 연결되었습니다: {self.addr}")
+        try:
+            if not self.perform_handshake(): return False
+            if not self.receive_metadata(): return False
+            if not self.receive_file_chunks(): return False
+            if not self.verify_signature(): return False
+            if not self.finalize_transfer(): return False
+            return True
+        except (ConnectionError, ConnectionResetError, BrokenPipeError) as e:
+            logger.log("ERROR", "SERVER", f"클라이언트 연결 끊김: {e}")
+            return False
+        except Exception as e:
+            logger.log("ERROR", "SERVER", str(e), exc_info=True)
+            return False
+        finally:
+            self.cleanup()
+
+    def abort(self, reason: str) -> bool:
+        """클라이언트에게 상세한 에러 사유를 전달하고 연결을 안전하게 종료합니다 (Graceful Shutdown)"""
+        try:
+            network.send_with_length(self.conn, f"ERROR:{reason}".encode('utf-8'))
+            self.conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, constants.SOCKET_LINGER_TIMEOUT))
+            self.conn.shutdown(socket.SHUT_WR)
+            self.conn.settimeout(1.0)
+            bytes_drained = 0
+            while bytes_drained < constants.MAX_DRAIN_BYTES:  # 최대 설정값까지만 버퍼를 비우고 강제 종료
+                chunk = self.conn.recv(1024)
+                if not chunk:
+                    break
+                bytes_drained += len(chunk)
+        except Exception:
+            pass
+        return False
+
+    def perform_handshake(self) -> bool:
+        """[단계 1] 핸드셰이크: KEM 키 생성 및 교환"""
+        try:
+            self.session_key = handshake.perform_server_handshake(self.conn)
+            return True
+        except Exception as e:
+            logger.log("ERROR", "HANDSHAKE", str(e), exc_info=True)
+            return False
+
+    def receive_metadata(self) -> bool:
+        """
+        [단계 2] 전송될 파일의 초기 메타데이터 수신
+        """
+        try:
+            self.client_id, self.filename, self.original_filesize = metadata.receive_metadata(self.conn)
+            return True
+        except Exception as e:
+            logger.log("ERROR", "METADATA", str(e))
+            return self.abort(str(e))
+
+    def receive_file_chunks(self) -> bool:
+        try:
+            receiver = chunk_stream.ChunkReceiver(self.conn, self.session_key, self.file_hasher)
+            self.temp_path, self.received_size = receiver.receive(self.original_filesize)
+            return True
+        except exceptions.PQCBaseError as e:
+            return self.abort(str(e))
+
+    def verify_signature(self) -> bool:
+        """[단계 4 & 5] 후반 메타데이터(해시) 수신 및 서명/무결성 검증"""
+        challenge_nonce = "CHALLENGE_" + os.urandom(16).hex()
+        
+        if not CLIENT_ID_PATTERN.match(self.client_id):
+            logger.log("FAIL", "VERIFY", "유효하지 않은 클라이언트 ID 포맷입니다.")
+            return self.abort("유효하지 않은 클라이언트 ID 포맷")
+            
+        if self.received_size != self.original_filesize:
+            logger.log("FAIL", "FILE", f"파일 크기 불일치: 선언됨={self.original_filesize}, 수신됨={self.received_size}")
+            return self.abort("불완전한 파일 전송 (크기 불일치)")
+
+        is_valid = signature.verify_signature(
+            self.conn,
+            self.client_id,
+            self.filename,
+            self.received_size,
+            self.session_key,
+            self.file_hasher.hexdigest(),
+            challenge_nonce
+        )
+        if not is_valid:
+            return self.abort("전자서명/해시 검증 실패")
+            
+        logger.log("PASS", "VERIFY", "파일 무결성: 통과")
+        logger.log("PASS", "VERIFY", "송신자 인증: 통과")
+        return True
+
+    def finalize_transfer(self) -> bool:
+        """
+        [단계 6] 클라이언트 종료 신호 대기 및 파일 자동 저장
+        
+        클라이언트로부터 'CLIENT_DONE' 신호를 수신한 후, 
+        안전하게 임시 파일(.tmp)을 실제 저장 경로(received_files 폴더)로 이동합니다.
+        이름이 겹칠 경우 (1), (2) 등 숫자를 붙여 파일 덮어쓰기를 방지합니다.
+        """
+        client_signal = network.recv_with_length(self.conn, max_len=1000)
+        if client_signal != b"CLIENT_DONE":
+            logger.log("ERROR", "TRANSFER", f"예상치 못한 클라이언트 신호: {client_signal}")
+            return self.abort("정상적인 종료 신호(CLIENT_DONE)를 수신하지 못했습니다")
+
+        logger.log("INFO", "TRANSFER", "CLIENT_DONE 신호 수신 완료")
+
+        target_dir = config.SAVE_DIR
+        base_name, ext = os.path.splitext(self.filename)
+        
+        # 전역 락을 사용하여 파일 이름 중복 확인과 예약(선점)만 수행하여 임계 구역(Critical Section) 최소화
+        with self.file_save_lock:
+            save_path = os.path.join(target_dir, self.filename)
+            counter = 1
+            while os.path.exists(save_path):
+                save_path = os.path.join(target_dir, f"{base_name}({counter}){ext}")
+                counter += 1
+            # 빈 파일을 즉시 생성하여 다른 클라이언트 스레드가 동일한 이름을 가져가지 못하도록 예약(선점)합니다.
+            open(save_path, 'a').close()
+            
+        # [최적화] 파일 이동(Move)은 파일 시스템에 따라 오래 걸릴 수 있으므로 락을 해제한 상태에서 병렬 처리합니다.
+        shutil.move(self.temp_path, save_path)
+        self.temp_path = None
+
+        logger.log("RESULT", "TRANSFER", f"파일이 자동으로 저장됨: {save_path}")
+        try:
+            network.send_with_length(self.conn, b"SERVER_OK")
+        except Exception:
+            pass
+        return True
+
+    def cleanup(self):
+        """
+        소켓 연결을 종료하고, 파일 전송이 비정상적으로 종료되었을 경우
+        남아있는 임시 파일을 안전하게 삭제하여 디스크 용량 누수를 방지합니다.
+        """
+        if self.conn:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+        
+        # 임시 파일이 아직 남아있다면 삭제 (ChunkReceiver에서 파일 객체는 닫혀있음)
+        if self.temp_path and os.path.exists(self.temp_path):
+            try:
+                os.remove(self.temp_path)
+                logger.log("INFO", "FILE", "임시 파일이 삭제되었습니다")
+            except Exception as e:
+                logger.log("ERROR", "FILE", f"임시 파일 삭제 실패: {e}")
+                
+        try:
+            if self.conn:
+                self.conn.close()
+                logger.log("INFO", "CONNECT", "연결이 종료되었습니다")
+        except Exception:
+            pass
+
+class PQCServer:
+    """
+    PQC 파일 전송 서버의 전체 라이프사이클을 관리하는 클래스
+    소켓 바인딩, 리스닝, 스레드 풀 할당 및 PQCServerHandler 생성을 담당합니다.
+    """
+    def __init__(self, host: str, port: int, max_concurrent_clients: int = 100):
+        self.host = host
+        self.port = port
+        self.max_concurrent_clients = max_concurrent_clients
+        self.file_save_lock = threading.Lock()
+        
+    def start(self):
+        """서버 소켓을 열고 클라이언트의 연결을 대기합니다."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        connection_semaphore = threading.Semaphore(self.max_concurrent_clients)
+        executor = ThreadPoolExecutor(max_workers=self.max_concurrent_clients)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            network.configure_socket(s, is_server=True)
+            s.bind((self.host, self.port))
+            s.listen(constants.SERVER_LISTEN_BACKLOG)
+            
+            logger.log("INFO", "SYSTEM", f"PQC 보안 서버 데몬이 시작되었습니다 (최대 동시 접속: {self.max_concurrent_clients}명)")
+            logger.log("INFO", "CONNECT", f"{self.port} 포트에서 수신 대기 중")
+
+            while True:
+                try:
+                    conn, addr = s.accept()
+                    
+                    if not connection_semaphore.acquire(blocking=False):
+                        logger.log("ERROR", "SYSTEM", f"최대 동시 접속자 수({self.max_concurrent_clients})를 초과했습니다. 연결을 거부합니다: {addr}")
+                        conn.close()
+                        continue
+                    
+                    network.configure_socket(conn, is_server=False)
+                    conn.settimeout(constants.DEFAULT_SOCKET_TIMEOUT)
+                    
+                    handler = PQCServerHandler(conn, addr, self.file_save_lock)
+                    
+                    def handle_client(h):
+                        try:
+                            if h.handle():
+                                logger.log("RESULT", "TRANSFER", "파일 전송이 완료되었습니다")
+                        finally:
+                            connection_semaphore.release()
+                    
+                    executor.submit(handle_client, handler)
+                except KeyboardInterrupt:
+                    logger.log("INFO", "SYSTEM", "서버를 종료합니다.")
+                    executor.shutdown(wait=False)
+                    break
+                except Exception as e:
+                    logger.log("ERROR", "SYSTEM", f"서버 수신 오류: {e}")
+
+

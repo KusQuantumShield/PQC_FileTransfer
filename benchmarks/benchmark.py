@@ -4,7 +4,7 @@ import oqs
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from pqc_transfer import utils
+from pqc_transfer.utils import config, crypto
 
 def measure_kem_performance(iterations=1000):
     """
@@ -12,10 +12,10 @@ def measure_kem_performance(iterations=1000):
     성능(소요 시간)을 측정합니다. PQC(양자 내성 암호)의 특징상 키 길이가 길고 연산 방식이 기존 RSA/ECC와 
     다르므로, 이 벤치마크를 통해 병목 지점을 파악할 수 있습니다.
     """
-    print(f"--- KEM 성능 측정 ({utils.KEM_ALG}, {iterations}회 반복) ---")
+    print(f"--- KEM 성능 측정 ({config.KEM_ALG}, {iterations}회 반복) ---")
     
     # 1. 키 쌍 생성 (Keypair Generation)
-    with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
+    with oqs.KeyEncapsulation(config.KEM_ALG) as kem:
         start = time.perf_counter()
         for _ in range(iterations):
             public_key = kem.generate_keypair()
@@ -23,7 +23,7 @@ def measure_kem_performance(iterations=1000):
     print(f"키 생성:  {(end - start) / iterations * 1000:.4f} ms/op")
 
     # 2. 캡슐화 (Encapsulation) - 공유 비밀키 생성 및 암호화
-    with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
+    with oqs.KeyEncapsulation(config.KEM_ALG) as kem:
         public_key = kem.generate_keypair()
         start = time.perf_counter()
         for _ in range(iterations):
@@ -32,7 +32,7 @@ def measure_kem_performance(iterations=1000):
         print(f"캡슐화:   {(end - start) / iterations * 1000:.4f} ms/op")
 
     # 3. 역캡슐화 (Decapsulation) - 암호화된 비밀키 복호화
-    with oqs.KeyEncapsulation(utils.KEM_ALG) as kem:
+    with oqs.KeyEncapsulation(config.KEM_ALG) as kem:
         public_key = kem.generate_keypair()
         ciphertext, shared_secret = kem.encap_secret(public_key)
         start = time.perf_counter()
@@ -48,11 +48,11 @@ def measure_dsa_performance(iterations=1000):
     양자 내성 서명 알고리즘(예: ML-DSA)의 키 생성, 서명(Sign), 검증(Verify) 단계별
     소요 시간을 측정하여, 서버/클라이언트 간 인증 과정에서 발생하는 오버헤드를 분석합니다.
     """
-    print(f"--- DSA 성능 측정 ({utils.SIG_ALG}, {iterations}회 반복) ---")
+    print(f"--- DSA 성능 측정 ({config.SIG_ALG}, {iterations}회 반복) ---")
     message = b"This is a test message for signature validation."
     
     # 1. 키 쌍 생성 (Keypair Generation)
-    with oqs.Signature(utils.SIG_ALG) as signer:
+    with oqs.Signature(config.SIG_ALG) as signer:
         start = time.perf_counter()
         for _ in range(iterations):
             public_key = signer.generate_keypair()
@@ -60,7 +60,7 @@ def measure_dsa_performance(iterations=1000):
     print(f"키 생성:  {(end - start) / iterations * 1000:.4f} ms/op")
 
     # 2. 서명 생성 (Sign)
-    with oqs.Signature(utils.SIG_ALG) as signer:
+    with oqs.Signature(config.SIG_ALG) as signer:
         public_key = signer.generate_keypair()
         start = time.perf_counter()
         for _ in range(iterations):
@@ -69,11 +69,11 @@ def measure_dsa_performance(iterations=1000):
         print(f"서명:     {(end - start) / iterations * 1000:.4f} ms/op")
 
     # 3. 서명 검증 (Verify)
-    with oqs.Signature(utils.SIG_ALG) as signer:
+    with oqs.Signature(config.SIG_ALG) as signer:
         public_key = signer.generate_keypair()
         signature = signer.sign(message)
         
-    with oqs.Signature(utils.SIG_ALG) as verifier:
+    with oqs.Signature(config.SIG_ALG) as verifier:
         start = time.perf_counter()
         for _ in range(iterations):
             is_valid = verifier.verify(message, signature, public_key)
@@ -122,4 +122,4 @@ if __name__ == "__main__":
     measure_dsa_performance(100)
     
     # 3. AES-GCM 대용량 청크 단위 암/복호화 성능 및 처리량 측정
-    measure_aes_performance(utils.CHUNK_SIZE, 100)
+    measure_aes_performance(config.CHUNK_SIZE, 100)

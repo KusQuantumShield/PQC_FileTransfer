@@ -11,8 +11,14 @@ requires-python = ">=3.9"
 dependencies = ["cryptography>=48.0.0", "liboqs-python>=0.8.0"]
 
 [project.scripts]
-pqc-server = "pqc_transfer.server:main"
-pqc-client = "pqc_transfer.client:main"
+pqc-server = "pqc_transfer.cli:main_server"
+pqc-client = "pqc_transfer.cli:main_client"
+pqc-tui = "pqc_transfer.ui.tui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+norecursedirs = ["liboqs", "liboqs-python"]
+python_files = ["*_test_*.py", "test_*.py"]
+pythonpath = ["src"]

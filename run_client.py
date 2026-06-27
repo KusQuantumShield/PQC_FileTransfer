@@ -1,10 +1,7 @@
 import sys
 import os
-# src 디렉토리를 파이썬 모듈 검색 경로에 추가하여 pqc_transfer 패키지를 임포트할 수 있게 함
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
-
-# 클라이언트 메인 함수 임포트
-from pqc_transfer.client import main
+from pqc_transfer.cli import main_client
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main_client())
