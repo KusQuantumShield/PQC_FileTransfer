@@ -69,6 +69,21 @@ PQC_FileTransfer/
 3. **liboqs-python 설정:**
     `liboqs-python` 폴더 내의 라이브러리가 Python 경로에 포함되어야 합니다. (또는 `pip install -e .` 과정에서 설치됩니다)
 
+### 🪟 Windows 환경 설치 안내
+
+Windows 환경에서 실행 시 TUI(`pqc-tui`) 동작을 위한 `curses` 모듈이 파이썬에 기본 내장되어 있지 않으며, `liboqs` C 라이브러리 빌드에 MSVC가 필요하여 설치가 까다로울 수 있습니다. 가급적 **WSL2 (Windows Subsystem for Linux)** 사용을 권장합니다.
+
+Native Windows(PowerShell 등)에서 설치할 경우 다음 과정을 따르세요:
+
+1. **사전 빌드 준비:** CMake 및 Visual Studio C++ Build Tools (MSVC)를 설치하고 [liboqs 설치 가이드](https://github.com/open-quantum-safe/liboqs)에 따라 Windows용 `liboqs`를 직접 빌드합니다.
+2. **windows-curses 추가 설치:** TUI 실행을 위해 `windows-curses` 패키지를 추가로 설치해야 합니다.
+
+   ```powershell
+   pip install -r requirements.txt
+   pip install windows-curses
+   pip install -e .
+   ```
+
 ## 📖 사용 방법
 
 본 프로젝트는 설치 후 `pqc-tui`, `pqc-server`, `pqc-client` 등의 명령어(Entry point)를 통해 간편하게 실행할 수 있습니다.
