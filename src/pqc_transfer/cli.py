@@ -6,18 +6,26 @@ from .utils import config, logger
 from .core.server import PQCServer
 from .core.client import PQCClient
 
+
 def _log_initialization(mode: str) -> None:
     logger.log("INFO", "SYSTEM", f"--- PQC 파일 전송 {mode} 초기화 ---")
-    logger.log("INFO", "SYSTEM", f"설정된 KEM 알고리즘: {config.default_config.kem_alg}")
-    logger.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {config.default_config.sig_alg}")
-    logger.log("INFO", "SYSTEM", f"청크(Chunk) 크기: {config.default_config.chunk_size} 바이트")
+    logger.log(
+        "INFO", "SYSTEM", f"설정된 KEM 알고리즘: {config.default_config.kem_alg}"
+    )
+    logger.log(
+        "INFO", "SYSTEM", f"설정된 서명 알고리즘: {config.default_config.sig_alg}"
+    )
+    logger.log(
+        "INFO", "SYSTEM", f"청크(Chunk) 크기: {config.default_config.chunk_size} 바이트"
+    )
+
 
 def run_server(host: str | None = None, port: int | None = None) -> None:
     """
     서버 프로그램의 메인 진입점(Entry Point) 함수입니다.
-    
+
     초기 설정을 로깅하고, PQCServer 객체를 생성 및 구동하여 클라이언트 연결 대기를 시작합니다.
-    
+
     Args:
         host (str | None): 바인딩할 서버 호스트 주소. None일 경우 기본 설정값을 사용.
         port (int | None): 바인딩할 서버 포트 번호. None일 경우 기본 설정값을 사용.
@@ -26,7 +34,7 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
     port = port if port is not None else config.default_config.port
 
     _log_initialization("서버")
-    
+
     server = PQCServer.from_config(host=host, port=port)
     server.start()
 
@@ -34,21 +42,25 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
 def run_client(file_path: str | None = None) -> None:
     """
     클라이언트 실행 및 파일 전송 진입점 함수입니다.
-    
+
     사용자로부터 전송할 파일의 경로를 전달받아 PQCClient 인스턴스를 초기화하고,
     양자 내성 암호화가 적용된 안전한 파일 전송을 시도합니다.
-    
+
     Args:
-        file_path (str | None): 서버로 전송할 대상 파일의 경로. 
+        file_path (str | None): 서버로 전송할 대상 파일의 경로.
                                입력되지 않거나 존재하지 않는 경로일 경우 에러 로그를 출력하고 중단합니다.
     """
     _log_initialization("클라이언트")
-    
+
     if not file_path:
         # CLI에서 파일 경로 없이 실행 시 더 이상 GUI 폴더 선택창을 띄우지 않고 명시적인 에러 반환 (관심사 분리)
-        logger.log("ERROR", "CLI", "전송할 파일 경로가 지정되지 않았습니다. 사용법: python -m pqc_transfer client <파일경로>")
+        logger.log(
+            "ERROR",
+            "CLI",
+            "전송할 파일 경로가 지정되지 않았습니다. 사용법: python -m pqc_transfer client <파일경로>",
+        )
         return
-        
+
     if not os.path.isfile(file_path):
         logger.log("ERROR", "CLI", f"파일을 찾을 수 없습니다: {file_path}")
         return
@@ -71,7 +83,7 @@ def main_server():
 
 def main_client():
     """
-    `pqc-client` CLI 명령어 래퍼 함수입니다. 
+    `pqc-client` CLI 명령어 래퍼 함수입니다.
     명령줄 인자(sys.argv)에서 파일 경로를 추출합니다.
     """
     file_path = sys.argv[1] if len(sys.argv) > 1 else None
@@ -81,15 +93,36 @@ def main_client():
 def main():
     """
     `python -m pqc_transfer` 명령어로 모듈 직접 실행 시 진입점이 되는 함수입니다.
-    
+
     argparse를 통해 모드(server/client), 파일 경로, 호스트, 포트 등을 파싱합니다.
     """
     parser = argparse.ArgumentParser(description="PQC File Transfer (Quantum-Safe)")
-    parser.add_argument("mode", choices=["client", "server"], help="실행 모드를 선택하세요: client 또는 server")
-    parser.add_argument("file_path", nargs="?", help="클라이언트 모드일 경우 전송할 파일의 경로")
-    parser.add_argument('--host', type=str, default=config.default_config.host, help='수신 대기할 IP 주소')
-    parser.add_argument('--port', type=int, default=config.default_config.port, help='수신 대기할 포트 번호')
-    parser.add_argument('--save-dir', type=str, default=config.default_config.save_dir, help='파일이 저장될 디렉토리')
+    parser.add_argument(
+        "mode",
+        choices=["client", "server"],
+        help="실행 모드를 선택하세요: client 또는 server",
+    )
+    parser.add_argument(
+        "file_path", nargs="?", help="클라이언트 모드일 경우 전송할 파일의 경로"
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=config.default_config.host,
+        help="수신 대기할 IP 주소",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=config.default_config.port,
+        help="수신 대기할 포트 번호",
+    )
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default=config.default_config.save_dir,
+        help="파일이 저장될 디렉토리",
+    )
 
     args = parser.parse_args()
 

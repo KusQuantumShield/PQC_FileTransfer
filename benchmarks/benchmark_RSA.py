@@ -28,19 +28,21 @@ def add_result(
     operation,
     iterations="",
     avg_time_ms="",
-    value_bytes=""
+    value_bytes="",
 ):
     """
     측정 결과를 CSV 저장용 리스트에 추가합니다.
     """
-    results.append({
-        "category": category,
-        "algorithm": algorithm,
-        "operation": operation,
-        "iterations": iterations,
-        "avg_time_ms": "" if avg_time_ms == "" else f"{avg_time_ms:.4f}",
-        "value_bytes": value_bytes
-    })
+    results.append(
+        {
+            "category": category,
+            "algorithm": algorithm,
+            "operation": operation,
+            "iterations": iterations,
+            "avg_time_ms": "" if avg_time_ms == "" else f"{avg_time_ms:.4f}",
+            "value_bytes": value_bytes,
+        }
+    )
 
 
 def save_results_to_csv(results, filename=CSV_FILENAME):
@@ -53,7 +55,7 @@ def save_results_to_csv(results, filename=CSV_FILENAME):
         "operation",
         "iterations",
         "avg_time_ms",
-        "value_bytes"
+        "value_bytes",
     ]
 
     with open(filename, "w", newline="", encoding="utf-8-sig") as f:
@@ -70,10 +72,7 @@ def generate_rsa_keypair():
     - 보안 강도를 위해 통상적으로 사용되는 공개 지수(public_exponent)인 65537을 사용합니다.
     - 키 크기는 상단에 정의된 RSA_KEY_SIZE (예: 2048비트)를 적용합니다.
     """
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=RSA_KEY_SIZE
-    )
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=RSA_KEY_SIZE)
 
     public_key = private_key.public_key()
 
@@ -91,8 +90,8 @@ def rsa_encrypt_session_key(public_key, session_key: bytes) -> bytes:
         padding.OAEP(
             mgf=padding.MGF1(algorithm=hashes.SHA256()),
             algorithm=hashes.SHA256(),
-            label=None
-        )
+            label=None,
+        ),
     )
 
     return encrypted_session_key
@@ -101,7 +100,7 @@ def rsa_encrypt_session_key(public_key, session_key: bytes) -> bytes:
 def rsa_decrypt_session_key(private_key, encrypted_session_key: bytes) -> bytes:
     """
     RSA private key로 암호화된 AES session key를 복호화합니다.
-    - 암호화 단계에서 사용했던 것과 동일한 OAEP 패딩 및 SHA256 해시 설정을 사용해야 
+    - 암호화 단계에서 사용했던 것과 동일한 OAEP 패딩 및 SHA256 해시 설정을 사용해야
       정상적으로 원본 세션 키가 복구됩니다.
     """
     decrypted_session_key = private_key.decrypt(
@@ -109,8 +108,8 @@ def rsa_decrypt_session_key(private_key, encrypted_session_key: bytes) -> bytes:
         padding.OAEP(
             mgf=padding.MGF1(algorithm=hashes.SHA256()),
             algorithm=hashes.SHA256(),
-            label=None
-        )
+            label=None,
+        ),
     )
 
     return decrypted_session_key
@@ -123,7 +122,7 @@ def get_public_key_size(public_key) -> int:
     """
     public_key_der = public_key.public_bytes(
         encoding=serialization.Encoding.DER,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
 
     return len(public_key_der)
@@ -153,7 +152,7 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
         algorithm=f"RSA-{RSA_KEY_SIZE}",
         operation="key_generation",
         iterations=iterations,
-        avg_time_ms=keygen_ms
+        avg_time_ms=keygen_ms,
     )
 
     # 비교를 위해 keypair 하나를 생성해두고 encryption/decryption에 사용
@@ -177,7 +176,7 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
         algorithm="AES-256",
         operation="session_key_generation",
         iterations=iterations,
-        avg_time_ms=session_key_gen_ms
+        avg_time_ms=session_key_gen_ms,
     )
 
     # 3. RSA Encryption
@@ -200,7 +199,7 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
         algorithm=f"RSA-{RSA_KEY_SIZE}-OAEP-SHA256",
         operation="encryption",
         iterations=iterations,
-        avg_time_ms=encrypt_ms
+        avg_time_ms=encrypt_ms,
     )
 
     # 4. RSA Decryption
@@ -210,7 +209,9 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
     start = time.perf_counter()
 
     for _ in range(iterations):
-        decrypted_session_key = rsa_decrypt_session_key(private_key, encrypted_session_key)
+        decrypted_session_key = rsa_decrypt_session_key(
+            private_key, encrypted_session_key
+        )
 
     end = time.perf_counter()
 
@@ -223,7 +224,7 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
         algorithm=f"RSA-{RSA_KEY_SIZE}-OAEP-SHA256",
         operation="decryption",
         iterations=iterations,
-        avg_time_ms=decrypt_ms
+        avg_time_ms=decrypt_ms,
     )
 
     # 복호화된 키가 원본과 동일한지 최종 무결성 검증
@@ -241,7 +242,7 @@ def measure_rsa_key_exchange(results, iterations=ITERATIONS):
         algorithm=f"RSA-{RSA_KEY_SIZE}",
         operation="total_key_exchange",
         iterations=iterations,
-        avg_time_ms=total_ms
+        avg_time_ms=total_ms,
     )
 
     print()
@@ -270,7 +271,7 @@ def measure_rsa_size(results):
         category="SIZE",
         algorithm=f"RSA-{RSA_KEY_SIZE}",
         operation="rsa_public_key_der",
-        value_bytes=public_key_size
+        value_bytes=public_key_size,
     )
 
     add_result(
@@ -278,7 +279,7 @@ def measure_rsa_size(results):
         category="SIZE",
         algorithm=f"RSA-{RSA_KEY_SIZE}-OAEP-SHA256",
         operation="encrypted_session_key",
-        value_bytes=encrypted_session_key_size
+        value_bytes=encrypted_session_key_size,
     )
 
     add_result(
@@ -286,7 +287,7 @@ def measure_rsa_size(results):
         category="SIZE",
         algorithm="AES-256",
         operation="session_key",
-        value_bytes=session_key_size
+        value_bytes=session_key_size,
     )
 
     print()

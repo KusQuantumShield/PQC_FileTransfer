@@ -67,10 +67,10 @@ def save_bar_graph(title, labels, values, ylabel, output_path, log_scale=False):
     plt.bar(labels, values)
     plt.title(title)
     plt.ylabel(ylabel)
-    
+
     if log_scale:
-        plt.yscale('log')
-        
+        plt.yscale("log")
+
     plt.xticks(rotation=20, ha="right")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
@@ -97,15 +97,9 @@ def create_key_exchange_time_graph(pqc_rows, rsa_rows):
     # PQC 키 교환 전체 소요 시간 (서버/클라이언트 모두 HKDF 수행하므로 2번 합산)
     pqc_total = pqc_keygen + pqc_encap + pqc_decap + (pqc_hkdf * 2)
 
-    labels = [
-        "PQC(ML-KEM)",
-        "RSA"
-    ]
+    labels = ["PQC(ML-KEM)", "RSA"]
 
-    values = [
-        pqc_total,
-        rsa_total
-    ]
+    values = [pqc_total, rsa_total]
 
     save_bar_graph(
         title="PQC vs RSA Key Exchange Time",
@@ -113,7 +107,7 @@ def create_key_exchange_time_graph(pqc_rows, rsa_rows):
         values=values,
         ylabel="Average Time (ms) - Log Scale",
         output_path=OUTPUT_DIR / "pqc_vs_rsa_key_exchange_time.png",
-        log_scale=True
+        log_scale=True,
     )
 
     print()
@@ -135,7 +129,7 @@ def create_key_exchange_detail_graph(pqc_rows, rsa_rows):
         "RSA KeyGen",
         "RSA Encryption",
         "RSA Decryption",
-        "RSA Session Key Gen"
+        "RSA Session Key Gen",
     ]
 
     values = [
@@ -158,7 +152,7 @@ def create_key_exchange_detail_graph(pqc_rows, rsa_rows):
         values=values,
         ylabel="Average Time (ms) - Log Scale",
         output_path=OUTPUT_DIR / "pqc_vs_rsa_operation_detail.png",
-        log_scale=True
+        log_scale=True,
     )
 
 
@@ -173,7 +167,7 @@ def create_size_comparison_graph(pqc_rows, rsa_rows):
         "ML-KEM Shared Secret",
         "RSA Public Key",
         "RSA Encrypted Session Key",
-        "AES Session Key"
+        "AES Session Key",
     ]
 
     values = [
@@ -193,7 +187,7 @@ def create_size_comparison_graph(pqc_rows, rsa_rows):
         labels=labels,
         values=values,
         ylabel="Size (bytes)",
-        output_path=OUTPUT_DIR / "pqc_vs_rsa_size_comparison.png"
+        output_path=OUTPUT_DIR / "pqc_vs_rsa_size_comparison.png",
     )
 
     print()

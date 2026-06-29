@@ -1,5 +1,11 @@
 import time
 import os
+import sys
+
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+)
+
 import csv
 import oqs
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -23,7 +29,7 @@ def save_results_to_csv(results, filename=CSV_FILENAME):
         "chunk_size_bytes",
         "avg_time_ms",
         "throughput_MBps",
-        "value_bytes"
+        "value_bytes",
     ]
 
     with open(filename, "w", newline="", encoding="utf-8-sig") as f:
@@ -43,23 +49,27 @@ def add_result(
     avg_time_ms="",
     chunk_size_bytes="",
     throughput_MBps="",
-    value_bytes=""
+    value_bytes="",
 ):
     """
     측정 결과를 results 리스트에 추가합니다.
     - 각 측정 단계의 세부 결과(카테고리, 알고리즘, 동작 종류, 소요 시간, 처리량, 바이트 크기 등)를 모아
       최종적으로 CSV 파일로 출력하기 위한 헬퍼(helper) 함수입니다.
     """
-    results.append({
-        "category": category,
-        "algorithm": algorithm,
-        "operation": operation,
-        "iterations": iterations,
-        "chunk_size_bytes": chunk_size_bytes,
-        "avg_time_ms": "" if avg_time_ms == "" else f"{avg_time_ms:.4f}",
-        "throughput_MBps": "" if throughput_MBps == "" else f"{throughput_MBps:.2f}",
-        "value_bytes": value_bytes
-    })
+    results.append(
+        {
+            "category": category,
+            "algorithm": algorithm,
+            "operation": operation,
+            "iterations": iterations,
+            "chunk_size_bytes": chunk_size_bytes,
+            "avg_time_ms": "" if avg_time_ms == "" else f"{avg_time_ms:.4f}",
+            "throughput_MBps": ""
+            if throughput_MBps == ""
+            else f"{throughput_MBps:.2f}",
+            "value_bytes": value_bytes,
+        }
+    )
 
 
 def measure_kem_performance(results, iterations=1000):
@@ -71,7 +81,9 @@ def measure_kem_performance(results, iterations=1000):
       3. 역캡슐화 (Decapsulation): 수신한 암호문을 자신의 비밀키로 풀어 공유 비밀키를 복구하는 시간
       4. HKDF: 교환된 공유 비밀키를 실제 사용할 32바이트 AES 세션 키로 유도(Derive)하는 시간
     """
-    print(f"--- KEM 성능 측정 ({config.default_config.kem_alg}, {iterations}회 반복) ---")
+    print(
+        f"--- KEM 성능 측정 ({config.default_config.kem_alg}, {iterations}회 반복) ---"
+    )
 
     # 1. 키 쌍 생성(Keypair Generation)
     with oqs.KeyEncapsulation(config.default_config.kem_alg) as kem:
@@ -89,7 +101,7 @@ def measure_kem_performance(results, iterations=1000):
         algorithm=config.default_config.kem_alg,
         operation="key_generation",
         iterations=iterations,
-        avg_time_ms=keygen_ms
+        avg_time_ms=keygen_ms,
     )
 
     # 2. 캡슐화(Encapsulation)
@@ -112,7 +124,7 @@ def measure_kem_performance(results, iterations=1000):
         algorithm=config.default_config.kem_alg,
         operation="encapsulation",
         iterations=iterations,
-        avg_time_ms=encap_ms
+        avg_time_ms=encap_ms,
     )
 
     # 3. 역캡슐화(Decapsulation)
@@ -123,7 +135,7 @@ def measure_kem_performance(results, iterations=1000):
         start = time.perf_counter()
 
         for _ in range(iterations):
-            decrypted_secret = kem.decap_secret(ciphertext)
+            kem.decap_secret(ciphertext)
 
         end = time.perf_counter()
 
@@ -136,14 +148,14 @@ def measure_kem_performance(results, iterations=1000):
         algorithm=config.default_config.kem_alg,
         operation="decapsulation",
         iterations=iterations,
-        avg_time_ms=decap_ms
+        avg_time_ms=decap_ms,
     )
 
     # 4. HKDF 기반 세션 키 생성
     start = time.perf_counter()
 
     for _ in range(iterations):
-        session_key = crypto.derive_key(shared_secret)
+        crypto.derive_key(shared_secret)
 
     end = time.perf_counter()
 
@@ -156,7 +168,7 @@ def measure_kem_performance(results, iterations=1000):
         algorithm="HKDF-SHA256",
         operation="hkdf",
         iterations=iterations,
-        avg_time_ms=hkdf_ms
+        avg_time_ms=hkdf_ms,
     )
 
     print()
@@ -168,7 +180,9 @@ def measure_dsa_performance(results, iterations=1000):
     파일 무결성 검증과 송신자 인증에 걸리는 부하를 분석하기 위해,
     키 쌍 생성, 서명(Sign), 검증(Verify)의 3가지 핵심 동작에 대한 평균 처리 시간(ms/op)을 산출합니다.
     """
-    print(f"--- DSA 성능 측정 ({config.default_config.sig_alg}, {iterations}회 반복) ---")
+    print(
+        f"--- DSA 성능 측정 ({config.default_config.sig_alg}, {iterations}회 반복) ---"
+    )
 
     message = b"This is a test message for signature validation."
 
@@ -188,7 +202,7 @@ def measure_dsa_performance(results, iterations=1000):
         algorithm=config.default_config.sig_alg,
         operation="key_generation",
         iterations=iterations,
-        avg_time_ms=keygen_ms
+        avg_time_ms=keygen_ms,
     )
 
     # 2. 서명 생성(Sign)
@@ -211,7 +225,7 @@ def measure_dsa_performance(results, iterations=1000):
         algorithm=config.default_config.sig_alg,
         operation="sign",
         iterations=iterations,
-        avg_time_ms=sign_ms
+        avg_time_ms=sign_ms,
     )
 
     # 3. 서명 검증(Verify)
@@ -223,7 +237,7 @@ def measure_dsa_performance(results, iterations=1000):
         start = time.perf_counter()
 
         for _ in range(iterations):
-            is_valid = verifier.verify(message, signature, public_key)
+            verifier.verify(message, signature, public_key)
 
         end = time.perf_counter()
 
@@ -236,7 +250,7 @@ def measure_dsa_performance(results, iterations=1000):
         algorithm=config.default_config.sig_alg,
         operation="verify",
         iterations=iterations,
-        avg_time_ms=verify_ms
+        avg_time_ms=verify_ms,
     )
 
     print()
@@ -280,7 +294,7 @@ def measure_aes_performance(results, chunk_size=1024 * 1024, iterations=100):
         iterations=iterations,
         chunk_size_bytes=chunk_size,
         avg_time_ms=enc_ms,
-        throughput_MBps=enc_throughput
+        throughput_MBps=enc_throughput,
     )
 
     # 2. 복호화(Decrypt)
@@ -289,7 +303,7 @@ def measure_aes_performance(results, chunk_size=1024 * 1024, iterations=100):
     start = time.perf_counter()
 
     for _ in range(iterations):
-        plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+        aesgcm.decrypt(nonce, ciphertext, None)
 
     end = time.perf_counter()
 
@@ -307,7 +321,7 @@ def measure_aes_performance(results, chunk_size=1024 * 1024, iterations=100):
         iterations=iterations,
         chunk_size_bytes=chunk_size,
         avg_time_ms=dec_ms,
-        throughput_MBps=dec_throughput
+        throughput_MBps=dec_throughput,
     )
 
     print()
@@ -316,11 +330,13 @@ def measure_aes_performance(results, chunk_size=1024 * 1024, iterations=100):
 def measure_key_signature_sizes(results):
     """
     PQC 알고리즘은 기존 RSA/ECC에 비해 키와 서명의 크기가 매우 크다는 특징이 있습니다.
-    따라서 KEM(공개키, 암호문, 비밀키), DSA(공개키, 서명) 및 AES-GCM(논스), 전송 프로토콜(청크 헤더)에서 
+    따라서 KEM(공개키, 암호문, 비밀키), DSA(공개키, 서명) 및 AES-GCM(논스), 전송 프로토콜(청크 헤더)에서
     발생하는 실제 바이트(Bytes) 단위의 크기를 정확히 측정하여 기록합니다.
     이 데이터는 네트워크 대역폭(Bandwidth) 사용량 분석에 핵심적인 자료가 됩니다.
     """
-    print(f"--- 키 및 서명 크기 분석 ({config.default_config.kem_alg}, {config.default_config.sig_alg}) ---")
+    print(
+        f"--- 키 및 서명 크기 분석 ({config.default_config.kem_alg}, {config.default_config.sig_alg}) ---"
+    )
 
     # 1. KEM 관련 크기 측정
     with oqs.KeyEncapsulation(config.default_config.kem_alg) as kem:
@@ -340,7 +356,7 @@ def measure_key_signature_sizes(results):
         category="SIZE",
         algorithm=config.default_config.kem_alg,
         operation="kem_public_key",
-        value_bytes=kem_public_key_size
+        value_bytes=kem_public_key_size,
     )
 
     add_result(
@@ -348,7 +364,7 @@ def measure_key_signature_sizes(results):
         category="SIZE",
         algorithm=config.default_config.kem_alg,
         operation="kem_ciphertext",
-        value_bytes=kem_ciphertext_size
+        value_bytes=kem_ciphertext_size,
     )
 
     add_result(
@@ -356,7 +372,7 @@ def measure_key_signature_sizes(results):
         category="SIZE",
         algorithm=config.default_config.kem_alg,
         operation="kem_shared_secret",
-        value_bytes=kem_shared_secret_size
+        value_bytes=kem_shared_secret_size,
     )
 
     # 2. DSA 관련 크기 측정
@@ -377,7 +393,7 @@ def measure_key_signature_sizes(results):
         category="SIZE",
         algorithm=config.default_config.sig_alg,
         operation="dsa_public_key",
-        value_bytes=sig_public_key_size
+        value_bytes=sig_public_key_size,
     )
 
     add_result(
@@ -385,7 +401,7 @@ def measure_key_signature_sizes(results):
         category="SIZE",
         algorithm=config.default_config.sig_alg,
         operation="dsa_signature",
-        value_bytes=signature_size
+        value_bytes=signature_size,
     )
 
     # 3. AES-GCM 및 Chunk header 고정 크기
@@ -400,7 +416,7 @@ def measure_key_signature_sizes(results):
         category="SIZE",
         algorithm="AES-GCM",
         operation="nonce",
-        value_bytes=aes_gcm_nonce_size
+        value_bytes=aes_gcm_nonce_size,
     )
 
     add_result(
@@ -408,7 +424,7 @@ def measure_key_signature_sizes(results):
         category="SIZE",
         algorithm="CHUNK",
         operation="chunk_header",
-        value_bytes=chunk_header_size
+        value_bytes=chunk_header_size,
     )
 
     print()
@@ -422,13 +438,13 @@ if __name__ == "__main__":
 
     # 1. KEM (Key Encapsulation Mechanism) 성능 측정 (1000회 반복)
     measure_kem_performance(results, 1000)
-    
+
     # 2. DSA (Digital Signature Algorithm) 성능 측정 (100회 반복)
     measure_dsa_performance(results, 100)
-    
+
     # 3. 대용량 데이터를 처리하는 AES-GCM 대칭키 성능 측정 (기본 CHUNK 크기로 100회 반복)
     measure_aes_performance(results, config.default_config.chunk_size, 100)
-    
+
     # 4. KEM, DSA 등 각 알고리즘이 소비하는 바이트(Bytes) 크기 분석
     measure_key_signature_sizes(results)
 
