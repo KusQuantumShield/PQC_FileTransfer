@@ -7,7 +7,7 @@ name = "pqc_transfer"
 version = "1.0.0"
 description = "A Post-Quantum Cryptography (PQC) File Transfer Protocol"
 authors = [{ name = "AgCat", email = "rkdqudwl0627@naver.com" }]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "cryptography>=46.0.0",
     "liboqs-python>=0.15.0",
