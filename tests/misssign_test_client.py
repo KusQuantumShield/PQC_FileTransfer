@@ -2,7 +2,7 @@ import os
 import pytest
 from unittest.mock import patch
 from pqc_transfer.core.client import PQCClient
-from pqc_transfer.utils import network
+from pqc_transfer.utils.connection import SecureConnection
 
 def test_misssign_test(dummy_file):
     """
@@ -12,7 +12,7 @@ def test_misssign_test(dummy_file):
     client = PQCClient.from_config(dummy_file)
     
     # 원래의 network.send_with_length 함수 저장
-    original_send = network.send_with_length
+    original_send = SecureConnection.send_with_length
 
     # 시그니처가 전송되는 시점인지 파악하기 위한 플래그
     # PQCClient는 공개키를 먼저 보내고 그 다음 시그니처를 보냅니다.
@@ -21,7 +21,7 @@ def test_misssign_test(dummy_file):
     import oqs
     from pqc_transfer.utils import config
     
-    with oqs.Signature(config.SIG_ALG) as signer:
+    with oqs.Signature(config.default_config.sig_alg) as signer:
         pk_len = signer.details['length_public_key']
         sig_len = signer.details['length_signature']
 
@@ -39,7 +39,7 @@ def test_misssign_test(dummy_file):
         return original_send(sock, data)
 
     # 모킹 적용
-    with patch('pqc_transfer.utils.network.send_with_length', side_effect=mocked_send):
+    with patch('pqc_transfer.utils.connection.SecureConnection.send_with_length', side_effect=mocked_send, autospec=True):
         with pytest.raises(Exception):
             client.transfer()
             

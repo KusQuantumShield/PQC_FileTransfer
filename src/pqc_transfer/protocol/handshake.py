@@ -2,26 +2,26 @@ import struct
 import time
 import oqs
 
-from ..utils import config, crypto, key_manager, logger, network
+from ..utils import config, crypto, key_manager, logger, connection
 from .. import exceptions
 from . import constants
 
 import socket
 
-def perform_client_handshake(sock: socket.socket, server_ip: str, kem_alg: str, sig_alg: str, km) -> bytes:
+def perform_client_handshake(conn: connection.SecureConnection, server_ip: str, kem_alg: str, sig_alg: str, km) -> bytes:
     """
     클라이언트 관점의 KEM 핸드셰이크 수행
     """
     kem_start_time = time.perf_counter()
     
-    pk_len_bytes = network.recv_exact(sock, 4)
+    pk_len_bytes = conn.recv_exact(4)
     pk_len = struct.unpack("!I", pk_len_bytes)[0]
     
     if pk_len <= 0 or pk_len > 10000:
         logger.log("FAIL", "KEM", f"유효하지 않은 공개키 길이: {pk_len}")
         raise exceptions.PQCHandshakeError("Invalid public key length")
 
-    public_key = network.recv_exact(sock, pk_len)
+    public_key = conn.recv_exact(pk_len)
     
     with oqs.KeyEncapsulation(kem_alg) as kem:
         expected_pk_len = kem.details['length_public_key']
@@ -29,8 +29,8 @@ def perform_client_handshake(sock: socket.socket, server_ip: str, kem_alg: str, 
             logger.log("ERROR", "KEM", f"유효하지 않은 서버 공개키 길이: {len(public_key)} (예상: {expected_pk_len})")
             raise exceptions.PQCHandshakeError(f"유효하지 않은 서버 공개키 길이 (크래시 방어)")
             
-        server_sig_pk = network.recv_with_length(sock, max_len=constants.MAX_SIG_KEY_LEN)
-        server_signature = network.recv_with_length(sock, max_len=constants.MAX_SIG_LEN)
+        server_sig_pk = conn.recv_with_length(max_len=constants.MAX_SIG_KEY_LEN)
+        server_signature = conn.recv_with_length(max_len=constants.MAX_SIG_LEN)
         
         with oqs.Signature(sig_alg) as verifier:
             expected_sig_pk_len = verifier.details['length_public_key']
@@ -59,7 +59,7 @@ def perform_client_handshake(sock: socket.socket, server_ip: str, kem_alg: str, 
     logger.log("PASS", "KEM", "캡슐화 완료")
     logger.log("INFO", "KEY", f"공유 비밀키 해시: {crypto.hash_ss(shared_secret)}")
 
-    network.send_with_length(sock, kem_ciphertext)
+    conn.send_with_length(kem_ciphertext)
     logger.log("INFO", "KEM", f"암호문 전송 완료 ({len(kem_ciphertext)} 바이트)")
 
     session_key = crypto.derive_key(shared_secret)
@@ -69,7 +69,7 @@ def perform_client_handshake(sock: socket.socket, server_ip: str, kem_alg: str, 
     
     return session_key
 
-def perform_server_handshake(conn: socket.socket, kem_alg: str, sig_alg: str, km) -> bytes:
+def perform_server_handshake(conn: connection.SecureConnection, kem_alg: str, sig_alg: str, km) -> bytes:
     """
     서버 관점의 KEM 핸드셰이크 수행
     """
@@ -82,19 +82,19 @@ def perform_server_handshake(conn: socket.socket, kem_alg: str, sig_alg: str, km
     logger.log("PASS", "KEM", "KEM 임시 키쌍 생성 완료")
     logger.log("INFO", "KEM", f"공개키 크기: {len(public_key)} 바이트")
 
-    conn.sendall(struct.pack("!I", len(public_key)))
-    conn.sendall(public_key)
+    conn.sock.sendall(struct.pack("!I", len(public_key)))
+    conn.sock.sendall(public_key)
     
     sig_public_key, sig_secret_key = km.get_server_sig_keys()
     with oqs.Signature(sig_alg, secret_key=sig_secret_key) as signer:
         signature = signer.sign(public_key)
         
-    network.send_with_length(conn, sig_public_key)
-    network.send_with_length(conn, signature)
+    conn.send_with_length(sig_public_key)
+    conn.send_with_length(signature)
 
     logger.log("INFO", "SIGN", "임시 KEM 공개키 서명 및 전송 완료 (MitM 방어용)")
 
-    kem_ciphertext = network.recv_with_length(conn, max_len=constants.MAX_KEM_CIPHERTEXT_LEN)
+    kem_ciphertext = conn.recv_with_length(max_len=constants.MAX_KEM_CIPHERTEXT_LEN)
     logger.log("INFO", "KEM", f"클라이언트 암호문 수신 완료 ({len(kem_ciphertext)} 바이트)")
 
     with oqs.KeyEncapsulation(kem_alg, secret_key=secret_key) as kem:

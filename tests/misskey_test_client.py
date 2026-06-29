@@ -2,7 +2,7 @@ import os
 import pytest
 from unittest.mock import patch
 from pqc_transfer.core.client import PQCClient
-from pqc_transfer.utils import network
+from pqc_transfer.utils.connection import SecureConnection
 
 def test_misskey_test(dummy_file):
     """
@@ -12,12 +12,12 @@ def test_misskey_test(dummy_file):
     client = PQCClient.from_config(dummy_file)
     
     # 원래의 network.send_with_length 함수 저장
-    original_send = network.send_with_length
+    original_send = SecureConnection.send_with_length
 
     import oqs
     from pqc_transfer.utils import config
     
-    with oqs.KeyEncapsulation(config.KEM_ALG) as kem:
+    with oqs.KeyEncapsulation(config.default_config.kem_alg) as kem:
         ct_len = kem.details['length_ciphertext']
 
     def mocked_send(sock, data):
@@ -30,7 +30,7 @@ def test_misskey_test(dummy_file):
         return original_send(sock, data)
 
     # network.send_with_length를 모킹하여 전송 가로채기
-    with patch('pqc_transfer.utils.network.send_with_length', side_effect=mocked_send):
+    with patch('pqc_transfer.utils.connection.SecureConnection.send_with_length', side_effect=mocked_send, autospec=True):
         with pytest.raises(Exception):
             client.transfer()
         

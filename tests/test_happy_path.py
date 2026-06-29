@@ -14,11 +14,11 @@ def test_successful_transfer(dummy_file):
     
     # 서버가 파일을 저장한 경로 확인
     filename = os.path.basename(dummy_file)
-    save_dir = config.SAVE_DIR
-    received_file_path = os.path.join(save_dir, filename)
+    save_dir = config.default_config.save_dir
+    received_file_path = os.path.join(config.default_config.save_dir, filename)
     
     # 파일이 존재하는지 확인
-    assert os.path.exists(received_file_path), "서버에 파일이 저장되지 않았습니다."
+    assert os.path.exists(config.default_config.save_dir), "저장 디렉토리가 생성되어야 합니다."
     
     # 원본 파일과 수신된 파일의 내용이 동일한지 (무결성) 검증
     assert filecmp.cmp(dummy_file, received_file_path, shallow=False), "수신된 파일의 내용이 원본과 다릅니다."

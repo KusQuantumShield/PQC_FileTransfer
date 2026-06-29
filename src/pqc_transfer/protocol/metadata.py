@@ -2,30 +2,30 @@ import struct
 import socket
 
 from . import constants
-from ..utils import network, logger
+from ..utils import connection, logger
 from .. import exceptions
 
-def send_metadata(sock: socket.socket, client_id: str, filename: str, filesize: int) -> None:
+def send_metadata(conn: connection.SecureConnection, client_id: str, filename: str, filesize: int) -> None:
     """
     클라이언트가 서버로 세션 정보(client_id)와 파일 메타데이터(filename, filesize)를 전송합니다.
     """
     client_id_bytes = client_id.encode("utf-8")
-    network.send_with_length(sock, client_id_bytes)
+    conn.send_with_length(client_id_bytes)
     
     filename_bytes = filename.encode("utf-8")
-    network.send_with_length(sock, filename_bytes)
+    conn.send_with_length(filename_bytes)
     
-    sock.sendall(struct.pack(constants.FILESIZE_FORMAT, filesize))
+    conn.sock.sendall(struct.pack(constants.FILESIZE_FORMAT, filesize))
     logger.log("INFO", "FILE", "초기 파일 메타데이터 전송 완료")
 
-def receive_metadata(conn: socket.socket) -> tuple[str, str, int]:
+def receive_metadata(conn: connection.SecureConnection) -> tuple[str, str, int]:
     """
     서버가 클라이언트로부터 세션 정보(client_id)와 파일 메타데이터(filename, filesize)를 수신합니다.
     """
-    client_id = network.recv_with_length(conn, max_len=constants.MAX_CLIENT_ID_LEN).decode("utf-8")
-    filename = network.recv_with_length(conn, max_len=constants.MAX_FILENAME_LEN).decode("utf-8")
+    client_id = conn.recv_with_length(max_len=constants.MAX_CLIENT_ID_LEN).decode("utf-8")
+    filename = conn.recv_with_length(max_len=constants.MAX_FILENAME_LEN).decode("utf-8")
     
-    filesize_bytes = network.recv_exact(conn, constants.FILESIZE_SIZE)
+    filesize_bytes = conn.recv_exact(constants.FILESIZE_SIZE)
     filesize = struct.unpack(constants.FILESIZE_FORMAT, filesize_bytes)[0]
     
     if filesize > constants.MAX_FILE_SIZE:

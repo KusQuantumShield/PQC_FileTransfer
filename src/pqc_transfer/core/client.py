@@ -2,9 +2,9 @@ import os
 import socket
 import hashlib
 
-from ..protocol import chunk_stream, handshake, signature, metadata
+from ..protocol import chunk_sender, handshake, signature, metadata
 from .. import exceptions
-from ..utils import logger, network
+from ..utils import logger, connection
 
 
 
@@ -23,17 +23,17 @@ class PQCClient:
         from ..utils import config
         from ..utils.key_manager import KeyManager
         
-        km = KeyManager(key_dir=config.KEY_DIR, sig_alg=config.SIG_ALG)
+        km = KeyManager(key_dir=config.default_config.key_dir, sig_alg=config.default_config.sig_alg)
         client_id = km.get_client_id()
         
         return cls(
             file_path=file_path,
-            server_ip=config.SERVER_IP,
-            port=config.PORT,
+            server_ip=config.default_config.server_ip,
+            port=config.default_config.port,
             client_id=client_id,
-            chunk_size=config.CHUNK_SIZE,
-            kem_alg=config.KEM_ALG,
-            sig_alg=config.SIG_ALG,
+            chunk_size=config.default_config.chunk_size,
+            kem_alg=config.default_config.kem_alg,
+            sig_alg=config.default_config.sig_alg,
             key_manager=km
         )
 
@@ -61,16 +61,16 @@ class PQCClient:
 
     def transfer(self):
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                network.configure_socket(sock, is_server=False)
-                sock.connect((self.server_ip, self.port))
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw_sock:
+                conn = connection.SecureConnection(raw_sock, is_server=False)
+                conn.sock.connect((self.server_ip, self.port))
                 logger.log("INFO", "CONNECT", f"서버 {self.server_ip}:{self.port}에 연결되었습니다")
 
-                session_key = self.perform_handshake(sock)
-                self.send_metadata(sock)
-                sent_size, file_hash = self.transfer_file_chunks(sock, session_key)
-                self.create_and_send_signature(sock, file_hash, sent_size, session_key)
-                self.finalize_transfer(sock)
+                session_key = self.perform_handshake(conn)
+                self.send_metadata(conn)
+                sent_size, file_hash = self.transfer_file_chunks(conn, session_key)
+                self.create_and_send_signature(conn, file_hash, sent_size, session_key)
+                self.finalize_transfer(conn)
 
         except ConnectionRefusedError as e:
             logger.log("ERROR", "CLIENT", f"서버 {self.server_ip}:{self.port} 에 연결할 수 없습니다. 서버가 실행 중인지 확인하세요.")
@@ -83,18 +83,18 @@ class PQCClient:
             logger.log("ERROR", "CLIENT", str(e), exc_info=True)
             raise
 
-    def perform_handshake(self, sock: socket.socket) -> bytes:
-        return handshake.perform_client_handshake(sock, self.server_ip, self.kem_alg, self.sig_alg, self.key_manager)
+    def perform_handshake(self, conn: connection.SecureConnection) -> bytes:
+        return handshake.perform_client_handshake(conn, self.server_ip, self.kem_alg, self.sig_alg, self.key_manager)
 
-    def send_metadata(self, sock: socket.socket):
+    def send_metadata(self, conn: connection.SecureConnection):
         """
         파일 전송 전, 파일 이름과 파일 크기(메타데이터)를 서버로 전송합니다.
         """
-        metadata.send_metadata(sock, self.client_id, self.filename, self.filesize)
+        metadata.send_metadata(conn, self.client_id, self.filename, self.filesize)
 
-    def transfer_file_chunks(self, sock: socket.socket, session_key: bytes) -> tuple[int, str]:
+    def transfer_file_chunks(self, conn: connection.SecureConnection, session_key: bytes) -> tuple[int, str]:
         file_hasher = hashlib.sha256()
-        sender = chunk_stream.ChunkSender(sock, session_key, file_hasher, self.chunk_size)
+        sender = chunk_sender.ChunkSender(conn, session_key, file_hasher, self.chunk_size)
         sent_size, file_hash = sender.send(
             self.file_path,
             self.filename,
@@ -102,9 +102,9 @@ class PQCClient:
         )
         return sent_size, file_hash
 
-    def create_and_send_signature(self, sock: socket.socket, file_hash: str, sent_size: int, session_key: bytes):
+    def create_and_send_signature(self, conn: connection.SecureConnection, file_hash: str, sent_size: int, session_key: bytes):
         signature.create_and_send_signature(
-            sock,
+            conn,
             file_hash,
             self.client_id,
             self.filename,
@@ -114,14 +114,14 @@ class PQCClient:
             self.key_manager
         )
 
-    def finalize_transfer(self, sock: socket.socket):
+    def finalize_transfer(self, conn: connection.SecureConnection):
         """
         [단계 6] 전송 완료 및 종료 처리
         """
-        network.send_with_length(sock, b"CLIENT_DONE")
+        conn.send_with_length(b"CLIENT_DONE")
         logger.log("INFO", "TRANSFER", "CLIENT_DONE 신호 전송 완료")
         
-        response = network.recv_with_length(sock, max_len=1024).decode("utf-8")
+        response = conn.recv_with_length(max_len=1024).decode("utf-8")
         if response.startswith("ERROR:"):
             raise exceptions.PQCProtocolError(f"서버 거부: {response[6:]}")
         elif response == "SERVER_OK":

@@ -9,16 +9,16 @@ from .ui import gui
 
 def _log_initialization(mode: str) -> None:
     logger.log("INFO", "SYSTEM", f"--- PQC 파일 전송 {mode} 초기화 ---")
-    logger.log("INFO", "SYSTEM", f"설정된 KEM 알고리즘: {config.KEM_ALG}")
-    logger.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {config.SIG_ALG}")
-    logger.log("INFO", "SYSTEM", f"청크(Chunk) 크기: {config.CHUNK_SIZE} 바이트")
+    logger.log("INFO", "SYSTEM", f"설정된 KEM 알고리즘: {config.default_config.kem_alg}")
+    logger.log("INFO", "SYSTEM", f"설정된 서명 알고리즘: {config.default_config.sig_alg}")
+    logger.log("INFO", "SYSTEM", f"청크(Chunk) 크기: {config.default_config.chunk_size} 바이트")
 
 def run_server(host: str | None = None, port: int | None = None) -> None:
     """
     서버 프로그램의 진입점(Entry Point)입니다.
     """
-    host = host if host is not None else config.HOST
-    port = port if port is not None else config.PORT
+    host = host if host is not None else config.default_config.host
+    port = port if port is not None else config.default_config.port
 
     _log_initialization("서버")
     from .core.server import PQCServer
@@ -70,10 +70,16 @@ def main():
     parser = argparse.ArgumentParser(description="PQC File Transfer (Quantum-Safe)")
     parser.add_argument("mode", choices=["client", "server"], help="실행 모드를 선택하세요: client 또는 server")
     parser.add_argument("file_path", nargs="?", help="클라이언트 모드일 경우 전송할 파일의 경로")
+    parser.add_argument('--host', type=str, default=config.default_config.host, help='수신 대기할 IP 주소')
+    parser.add_argument('--port', type=int, default=config.default_config.port, help='수신 대기할 포트 번호')
+    parser.add_argument('--save-dir', type=str, default=config.default_config.save_dir, help='파일이 저장될 디렉토리')
 
     args = parser.parse_args()
 
     if args.mode == "server":
-        run_server()
+        config.default_config.host = args.host
+        config.default_config.port = args.port
+        config.default_config.save_dir = args.save_dir
+        run_server(args.host, args.port)
     elif args.mode == "client":
         run_client(args.file_path)
