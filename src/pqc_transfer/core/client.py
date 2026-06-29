@@ -96,6 +96,9 @@ class PQCClient:
             raise exceptions.PQCNetworkError(
                 "서버와의 연결이 끊어졌습니다.\n\n서버 측 보안 검증(무결성/송신자 인증) 실패로 인해 통신이 차단되었을 수 있습니다."
             ) from e
+        except exceptions.PQCProtocolError as e:
+            logger.log("ERROR", "CLIENT", str(e), exc_info=False)
+            raise
         except Exception as e:
             logger.log("ERROR", "CLIENT", str(e), exc_info=True)
             raise

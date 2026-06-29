@@ -104,3 +104,6 @@ class FilePicker:
                         return target
             elif key == 27:  # ESC
                 return None
+            elif key == curses.KEY_RESIZE:
+                if hasattr(curses, "update_lines_cols"):
+                    curses.update_lines_cols()

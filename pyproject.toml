@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "cryptography>=46.0.0",
     "liboqs-python>=0.15.0",
+    "pytest>=7.0.0",
     "windows-curses; sys_platform == 'win32'",
     "colorama; sys_platform == 'win32'",
 ]

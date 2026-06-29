@@ -35,15 +35,25 @@ class SubprocessRunner:
         h, w = self.stdscr.getmaxyx()
 
         self.stdscr.attron(curses.color_pair(5) | curses.A_REVERSE | curses.A_BOLD)
-        self.stdscr.addstr(0, 0, f" {title} ".ljust(w))
+        try:
+            self.stdscr.addstr(0, 0, f" {title} "[:w-1].ljust(w-1))
+        except curses.error:
+            pass
         self.stdscr.attroff(curses.color_pair(5) | curses.A_REVERSE | curses.A_BOLD)
 
         log_window = curses.newwin(h - 3, w, 1, 0)
         log_window.scrollok(True)
 
-        self.stdscr.addstr(
-            h - 1, 0, "[Press 'q' or ESC to stop/return]".ljust(w - 1), curses.A_REVERSE
-        )
+        try:
+            footer = "[Press 'q' or ESC to stop/return | UP/DOWN/PgUp/PgDn to scroll]"
+            self.stdscr.addstr(
+                h - 1,
+                0,
+                footer[:w-1].ljust(w-1),
+                curses.A_REVERSE,
+            )
+        except curses.error:
+            pass
         self.stdscr.refresh()
 
         q = queue.Queue()
@@ -75,28 +85,108 @@ class SubprocessRunner:
 
         self.stdscr.nodelay(True)
         running = True
+        process_alive = True
         logs = []
+        scroll_offset = 0
 
         while running:
-            lines_added = False
-            while True:
-                try:
-                    line = q.get_nowait()
-                    if line is None:
-                        running = False
-                        logs.append("\n--- Process Finished ---")
-                        lines_added = True
+            needs_redraw = False
+            
+            if process_alive:
+                while True:
+                    try:
+                        line = q.get_nowait()
+                        if line is None:
+                            process_alive = False
+                            logs.append("\n--- Process Finished ---")
+                            needs_redraw = True
+                            
+                            try:
+                                footer_ended = "[Process Ended. Press 'q' or ESC to return | UP/DOWN/PgUp/PgDn to scroll]"
+                                self.stdscr.addstr(
+                                    h - 1,
+                                    0,
+                                    footer_ended[:w-1].ljust(w-1),
+                                    curses.A_REVERSE,
+                                )
+                            except curses.error:
+                                pass
+                            self.stdscr.refresh()
+                            break
+                        clean_line = ansi_escape.sub("", line).strip()
+                        if clean_line:
+                            logs.append(clean_line)
+                            needs_redraw = True
+                    except queue.Empty:
                         break
-                    clean_line = ansi_escape.sub("", line).strip()
-                    if clean_line:
-                        logs.append(clean_line)
-                        lines_added = True
-                except queue.Empty:
-                    break
 
-            if lines_added:
+            key = self.stdscr.getch()
+            if key != -1:
+                if key in [ord("q"), ord("Q"), 27]:
+                    running = False
+                    break
+                elif key == curses.KEY_UP:
+                    scroll_offset += 1
+                    needs_redraw = True
+                elif key == curses.KEY_DOWN:
+                    scroll_offset -= 1
+                    needs_redraw = True
+                elif key == curses.KEY_PPAGE:
+                    scroll_offset += (h - 4)
+                    needs_redraw = True
+                elif key == curses.KEY_NPAGE:
+                    scroll_offset -= (h - 4)
+                    needs_redraw = True
+                elif key == curses.KEY_RESIZE:
+                    if hasattr(curses, "update_lines_cols"):
+                        curses.update_lines_cols()
+                    h, w = self.stdscr.getmaxyx()
+                    try:
+                        if h > 3 and w > 0:
+                            log_window.resize(h - 3, w)
+                    except curses.error:
+                        pass
+                    
+                    self.stdscr.clear()
+                    self.stdscr.attron(curses.color_pair(5) | curses.A_REVERSE | curses.A_BOLD)
+                    try:
+                        self.stdscr.addstr(0, 0, f" {title} "[:w-1].ljust(w-1))
+                    except curses.error:
+                        pass
+                    self.stdscr.attroff(curses.color_pair(5) | curses.A_REVERSE | curses.A_BOLD)
+
+                    try:
+                        if not process_alive:
+                            footer_text = "[Process Ended. Press 'q' or ESC to return | UP/DOWN/PgUp/PgDn to scroll]"
+                        else:
+                            footer_text = "[Press 'q' or ESC to stop/return | UP/DOWN/PgUp/PgDn to scroll]"
+                        self.stdscr.addstr(
+                            h - 1,
+                            0,
+                            footer_text[:w-1].ljust(w-1),
+                            curses.A_REVERSE,
+                        )
+                    except curses.error:
+                        pass
+                    self.stdscr.refresh()
+                    needs_redraw = True
+
+            max_scroll = max(0, len(logs) - (h - 4))
+            if scroll_offset > max_scroll:
+                scroll_offset = max_scroll
+            if scroll_offset < 0:
+                scroll_offset = 0
+
+            if needs_redraw:
                 log_window.clear()
-                display_logs = logs[-(h - 4) :]
+                visible_lines = h - 4
+                if scroll_offset == 0:
+                    display_logs = logs[-visible_lines:] if logs else []
+                else:
+                    start_idx = max(0, len(logs) - visible_lines - scroll_offset)
+                    end_idx = start_idx + visible_lines
+                    display_logs = logs[start_idx:end_idx]
+
                 for i, log_line in enumerate(display_logs):
                     color = 0
                     if "[PASS]" in log_line or "[RESULT]" in log_line:
@@ -112,24 +202,10 @@ class SubprocessRunner:
                         pass
                 log_window.refresh()
 
-            key = self.stdscr.getch()
-            if key in [ord("q"), ord("Q"), 27]:
-                if process.poll() is None:
-                    process.terminate()
-                break
-
             curses.napms(50)
+
 
         self.stdscr.nodelay(False)
         if process.poll() is None:
             process.terminate()
         process.wait()
-
-        self.stdscr.addstr(
-            h - 1,
-            0,
-            "[Process Ended. Press any key to return]".ljust(w - 1),
-            curses.A_REVERSE,
-        )
-        self.stdscr.refresh()
-        self.stdscr.getch()

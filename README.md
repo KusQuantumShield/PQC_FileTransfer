@@ -33,20 +33,26 @@
 ```text
 PQC_FileTransfer/
 ├── pyproject.toml         # 패키지 빌드 및 설정 메타데이터
-├── requirements.txt       # 의존성 패키지 목록
+├── uv.lock                # uv 의존성 잠금(Lock) 파일
+├── requirements.txt       # (선택) 레거시 의존성 패키지 목록
+├── Dockerfile             # Docker 이미지 빌드용 설정 파일
+├── docker-compose.yml     # Docker Compose 실행 설정
 ├── src/
 │   └── pqc_transfer/      # 메인 패키지
-│       ├── core/          # PQC 서버 및 클라이언트 핸들러 로직 (server.py, client.py)
-│       ├── protocol/      # 프로토콜 세부 구현 (handshake, metadata, signature, chunk 등)
-│       ├── ui/            # 터미널 사용자 인터페이스 (TUI) 및 파일 선택기 GUI 등
-│       ├── utils/         # 기능별 분리된 유틸리티 패키지 (config, crypto, network 등)
-│       ├── cli.py         # 커맨드라인 인터페이스 (CLI) 진입점 로직
-│       └── exceptions.py  # 예외 처리 클래스
-├── attack/                # 공격 기법 시뮬레이션 스크립트
-├── benchmarks/            # 암호 알고리즘 성능 측정 벤치마크
-├── tests/                 # 무결성/인증 오류 검증용 테스트 스크립트
-├── liboqs/                # liboqs C 라이브러리 소스
-└── liboqs-python/         # liboqs Python 래퍼
+│       ├── core/          # 서버 및 클라이언트 핵심 핸들러 로직 (server.py, client.py, handler.py)
+│       ├── protocol/      # PQC 기반 통신 프로토콜 구현 (handshake, metadata, signature, chunk 등)
+│       ├── ui/            # 터미널 사용자 인터페이스 (TUI) 및 파일 선택기 GUI (tui.py, gui.py 등)
+│       ├── utils/         # 공통 유틸리티 모듈 (config, crypto, network, key_manager, logger 등)
+│       ├── cli.py         # 커맨드라인 인터페이스 (CLI) 명령어 파싱 및 진입점
+│       ├── exceptions.py  # 사용자 정의 예외 처리 클래스
+│       └── __main__.py    # 패키지 직접 실행을 위한 진입점 (python -m pqc_transfer)
+├── attack/                # 해시/페이로드/서명 변조 등 해킹 공격 시뮬레이션 스크립트
+├── benchmarks/            # PQC 암호 알고리즘 성능 측정(CSV 저장) 및 RSA/ECC 비교 그래프 생성 도구
+├── tests/                 # 무결성, 오류 처리 및 공격 대응 검증용 pytest 단위 테스트
+├── dummy_keys/            # 테스트 및 데모 목적으로 사용되는 더미 키 데이터 저장소
+├── received_files/        # 서버가 수신 및 검증 완료한 파일이 저장되는 디렉토리
+├── liboqs/                # (Submodule) 양자 내성 암호 알고리즘 liboqs C 라이브러리 소스
+└── liboqs-python/         # (Submodule) liboqs Python 래퍼 라이브러리
 ```
 
 ## ⚙️ 설치 및 준비 사항
@@ -105,6 +111,32 @@ Native Windows(PowerShell 등)에서 설치할 경우 다음 과정을 따르세
    # (참고: uv sync --all-extras 명령어를 사용하셔도 됩니다.)
    ```
 
+### 🐳 Docker 환경에서 실행하기 (가장 쉬운 방법)
+
+복잡한 C 라이브러리 빌드나 시스템 의존성 문제를 피하려면 제공된 Docker 환경을 사용하는 것을 적극 권장합니다.
+최신 Ubuntu 환경을 기준으로 `liboqs`와 모든 Python 패키지가 자동으로 설치됩니다.
+
+1. **Docker 컨테이너 빌드 및 실행 (백그라운드):**
+   ```bash
+   docker-compose up -d --build
+   ```
+2. **컨테이너 쉘에 접속하여 프로그램 테스트:**
+   ```bash
+   docker-compose exec pqc-app bash
+   
+   # 내부 접속 후 TUI 실행 (또는 아래의 CLI 명령어 사용 가능)
+   uv run pqc-tui
+   ```
+   *(참고: 호스트 컴퓨터의 `received_files` 디렉토리와 컨테이너 내부의 저장소가 자동으로 연동되어 있습니다.)*
+
+3. **컨테이너 외부에서 직접 명령어 실행하기:**
+   컨테이너 쉘에 접속하지 않고도 호스트 터미널에서 바로 각 기능들을 실행할 수 있습니다.
+   - **TUI 실행:** `docker-compose exec pqc-app uv run pqc-tui`
+   - **서버 실행:** `docker-compose exec pqc-app uv run pqc-server`
+   - **클라이언트 실행:** `docker-compose exec pqc-app uv run pqc-client <전송할_파일_경로>`
+   - **테스트 전체 실행:** `docker-compose exec pqc-app uv run pytest tests/`
+   - **공격 시뮬레이션:** `docker-compose exec pqc-app uv run python attack/attack_hash.py` (원하는 스크립트 지정)
+   - **벤치마크 실행:** `docker-compose exec pqc-app uv run python benchmarks/benchmark.py` (원하는 스크립트 지정)
 ## 📖 사용 방법
 
 본 프로젝트는 설치 후 `pqc-tui`, `pqc-server`, `pqc-client` 등의 명령어(Entry point)를 통해 간편하게 실행할 수 있습니다.

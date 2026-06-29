@@ -3,6 +3,7 @@ import zlib
 import time
 import tempfile
 import typing
+import sys
 
 from . import constants
 from .chunk_base import ChunkProcessorBase
@@ -56,6 +57,7 @@ class ChunkReceiver(ChunkProcessorBase):
         expected_chunk_index = 0
         received_size = 0
         transfer_start_time = time.perf_counter()
+
 
         try:
             while True:
@@ -113,11 +115,6 @@ class ChunkReceiver(ChunkProcessorBase):
                 if received_size > original_filesize:
                     raise exceptions.PQCSecurityError("수신 파일 크기 초과")
 
-                logger.log(
-                    "INFO",
-                    "CHUNK",
-                    f"청크 {chunk_index} 수신 완료 ({received_size}/{original_filesize} 바이트)",
-                )
                 expected_chunk_index += 1
 
                 if flags & constants.FLAG_EOF:

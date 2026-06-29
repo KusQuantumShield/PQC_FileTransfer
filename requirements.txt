@@ -6,7 +6,6 @@ liboqs-python>=0.15.0
 # 2. Windows 환경에서 TUI 및 터미널 색상 출력을 위한 패키지
 windows-curses; sys_platform == 'win32'
 colorama; sys_platform == 'win32'
-
 # 3. 공격 테스트 및 벤치마크(성능 측정) 실행을 위한 필수 패키지
 pytest>=7.0.0
 matplotlib>=3.10.0

@@ -3,6 +3,7 @@ import struct
 import zlib
 import time
 import typing
+import sys
 
 from . import constants
 from .chunk_base import ChunkProcessorBase
@@ -124,18 +125,13 @@ class ChunkSender(ChunkProcessorBase):
                     compressor.compress(chunk_view) if use_compression else chunk_view
                 )
 
+                sent_size += bytes_read
+
                 if len(chunk_data) == 0:
-                    sent_size += bytes_read
                     continue
 
                 self._send_chunk(chunk_index, flags, chunk_data)
 
-                sent_size += bytes_read
-                logger.log(
-                    "INFO",
-                    "CHUNK",
-                    f"청크 {chunk_index} 전송 완료 ({sent_size}/{filesize} 바이트)",
-                )
                 chunk_index += 1
 
         transfer_end_time = time.perf_counter()
