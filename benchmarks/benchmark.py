@@ -1,5 +1,11 @@
+import sys
 import time
 import os
+
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+)
+
 import oqs
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pqc_transfer.utils import config
