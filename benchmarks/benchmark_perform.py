@@ -73,10 +73,10 @@ def measure_kem_performance(results, iterations=1000):
       3. 역캡슐화 (Decapsulation): 수신한 암호문을 자신의 비밀키로 풀어 공유 비밀키를 복구하는 시간
       4. HKDF: 교환된 공유 비밀키를 실제 사용할 32바이트 AES 세션 키로 유도(Derive)하는 시간
     """
-    print(f"--- KEM 성능 측정 ({config.KEM_ALG}, {iterations}회 반복) ---")
+    print(f"--- KEM 성능 측정 ({config.default_config.kem_alg}, {iterations}회 반복) ---")
 
     # 1. 키 쌍 생성(Keypair Generation)
-    with oqs.KeyEncapsulation(config.KEM_ALG) as kem:
+    with oqs.KeyEncapsulation(config.default_config.kem_alg) as kem:
         start = time.perf_counter()
         for _ in range(iterations):
             public_key = kem.generate_keypair()
@@ -88,14 +88,14 @@ def measure_kem_performance(results, iterations=1000):
     add_result(
         results,
         category="KEM",
-        algorithm=config.KEM_ALG,
+        algorithm=config.default_config.kem_alg,
         operation="key_generation",
         iterations=iterations,
         avg_time_ms=keygen_ms
     )
 
     # 2. 캡슐화(Encapsulation)
-    with oqs.KeyEncapsulation(config.KEM_ALG) as kem:
+    with oqs.KeyEncapsulation(config.default_config.kem_alg) as kem:
         public_key = kem.generate_keypair()
 
         start = time.perf_counter()
@@ -111,14 +111,14 @@ def measure_kem_performance(results, iterations=1000):
     add_result(
         results,
         category="KEM",
-        algorithm=config.KEM_ALG,
+        algorithm=config.default_config.kem_alg,
         operation="encapsulation",
         iterations=iterations,
         avg_time_ms=encap_ms
     )
 
     # 3. 역캡슐화(Decapsulation)
-    with oqs.KeyEncapsulation(config.KEM_ALG) as kem:
+    with oqs.KeyEncapsulation(config.default_config.kem_alg) as kem:
         public_key = kem.generate_keypair()
         ciphertext, shared_secret = kem.encap_secret(public_key)
 
@@ -135,7 +135,7 @@ def measure_kem_performance(results, iterations=1000):
     add_result(
         results,
         category="KEM",
-        algorithm=config.KEM_ALG,
+        algorithm=config.default_config.kem_alg,
         operation="decapsulation",
         iterations=iterations,
         avg_time_ms=decap_ms
@@ -170,12 +170,12 @@ def measure_dsa_performance(results, iterations=1000):
     파일 무결성 검증과 송신자 인증에 걸리는 부하를 분석하기 위해,
     키 쌍 생성, 서명(Sign), 검증(Verify)의 3가지 핵심 동작에 대한 평균 처리 시간(ms/op)을 산출합니다.
     """
-    print(f"--- DSA 성능 측정 ({config.SIG_ALG}, {iterations}회 반복) ---")
+    print(f"--- DSA 성능 측정 ({config.default_config.sig_alg}, {iterations}회 반복) ---")
 
     message = b"This is a test message for signature validation."
 
     # 1. 키 쌍 생성(Keypair Generation)
-    with oqs.Signature(config.SIG_ALG) as signer:
+    with oqs.Signature(config.default_config.sig_alg) as signer:
         start = time.perf_counter()
         for _ in range(iterations):
             public_key = signer.generate_keypair()
@@ -187,14 +187,14 @@ def measure_dsa_performance(results, iterations=1000):
     add_result(
         results,
         category="DSA",
-        algorithm=config.SIG_ALG,
+        algorithm=config.default_config.sig_alg,
         operation="key_generation",
         iterations=iterations,
         avg_time_ms=keygen_ms
     )
 
     # 2. 서명 생성(Sign)
-    with oqs.Signature(config.SIG_ALG) as signer:
+    with oqs.Signature(config.default_config.sig_alg) as signer:
         public_key = signer.generate_keypair()
 
         start = time.perf_counter()
@@ -210,18 +210,18 @@ def measure_dsa_performance(results, iterations=1000):
     add_result(
         results,
         category="DSA",
-        algorithm=config.SIG_ALG,
+        algorithm=config.default_config.sig_alg,
         operation="sign",
         iterations=iterations,
         avg_time_ms=sign_ms
     )
 
     # 3. 서명 검증(Verify)
-    with oqs.Signature(config.SIG_ALG) as signer:
+    with oqs.Signature(config.default_config.sig_alg) as signer:
         public_key = signer.generate_keypair()
         signature = signer.sign(message)
 
-    with oqs.Signature(config.SIG_ALG) as verifier:
+    with oqs.Signature(config.default_config.sig_alg) as verifier:
         start = time.perf_counter()
 
         for _ in range(iterations):
@@ -235,7 +235,7 @@ def measure_dsa_performance(results, iterations=1000):
     add_result(
         results,
         category="DSA",
-        algorithm=config.SIG_ALG,
+        algorithm=config.default_config.sig_alg,
         operation="verify",
         iterations=iterations,
         avg_time_ms=verify_ms
@@ -322,10 +322,10 @@ def measure_key_signature_sizes(results):
     발생하는 실제 바이트(Bytes) 단위의 크기를 정확히 측정하여 기록합니다.
     이 데이터는 네트워크 대역폭(Bandwidth) 사용량 분석에 핵심적인 자료가 됩니다.
     """
-    print(f"--- 키 및 서명 크기 분석 ({config.KEM_ALG}, {config.SIG_ALG}) ---")
+    print(f"--- 키 및 서명 크기 분석 ({config.default_config.kem_alg}, {config.default_config.sig_alg}) ---")
 
     # 1. KEM 관련 크기 측정
-    with oqs.KeyEncapsulation(config.KEM_ALG) as kem:
+    with oqs.KeyEncapsulation(config.default_config.kem_alg) as kem:
         kem_public_key = kem.generate_keypair()
         kem_ciphertext, kem_shared_secret = kem.encap_secret(kem_public_key)
 
@@ -340,7 +340,7 @@ def measure_key_signature_sizes(results):
     add_result(
         results,
         category="SIZE",
-        algorithm=config.KEM_ALG,
+        algorithm=config.default_config.kem_alg,
         operation="kem_public_key",
         value_bytes=kem_public_key_size
     )
@@ -348,7 +348,7 @@ def measure_key_signature_sizes(results):
     add_result(
         results,
         category="SIZE",
-        algorithm=config.KEM_ALG,
+        algorithm=config.default_config.kem_alg,
         operation="kem_ciphertext",
         value_bytes=kem_ciphertext_size
     )
@@ -356,7 +356,7 @@ def measure_key_signature_sizes(results):
     add_result(
         results,
         category="SIZE",
-        algorithm=config.KEM_ALG,
+        algorithm=config.default_config.kem_alg,
         operation="kem_shared_secret",
         value_bytes=kem_shared_secret_size
     )
@@ -364,7 +364,7 @@ def measure_key_signature_sizes(results):
     # 2. DSA 관련 크기 측정
     message = b"This is a test message for signature size analysis."
 
-    with oqs.Signature(config.SIG_ALG) as signer:
+    with oqs.Signature(config.default_config.sig_alg) as signer:
         sig_public_key = signer.generate_keypair()
         signature = signer.sign(message)
 
@@ -377,7 +377,7 @@ def measure_key_signature_sizes(results):
     add_result(
         results,
         category="SIZE",
-        algorithm=config.SIG_ALG,
+        algorithm=config.default_config.sig_alg,
         operation="dsa_public_key",
         value_bytes=sig_public_key_size
     )
@@ -385,7 +385,7 @@ def measure_key_signature_sizes(results):
     add_result(
         results,
         category="SIZE",
-        algorithm=config.SIG_ALG,
+        algorithm=config.default_config.sig_alg,
         operation="dsa_signature",
         value_bytes=signature_size
     )
@@ -429,7 +429,7 @@ if __name__ == "__main__":
     measure_dsa_performance(results, 100)
     
     # 3. 대용량 데이터를 처리하는 AES-GCM 대칭키 성능 측정 (기본 CHUNK 크기로 100회 반복)
-    measure_aes_performance(results, config.CHUNK_SIZE, 100)
+    measure_aes_performance(results, config.default_config.chunk_size, 100)
     
     # 4. KEM, DSA 등 각 알고리즘이 소비하는 바이트(Bytes) 크기 분석
     measure_key_signature_sizes(results)

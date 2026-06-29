@@ -4,17 +4,16 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from pqc_transfer.core.client import PQCClient
-from pqc_transfer.utils import logger, network
 
 class AttackHashClient(PQCClient):
     """해시 변조 공격을 수행하는 클라이언트 (PQCClient 상속)"""
-    def create_and_send_signature(self):
+    def create_and_send_signature(self, conn, file_hash: str, sent_size: int, session_key: bytes):
         print("[ATTACK] 파일 해시를 모두 '0'으로 채워진 가짜 해시로 변조합니다!")
         # 원본 해시를 조작하여 가짜 해시로 서명까지 생성 및 전송되게 함
-        self.file_hash = '0' * 64
+        fake_hash = '0' * 64
         
         # 원래의 서명 생성 로직 호출 (조작된 해시가 전송됨)
-        super().create_and_send_signature()
+        super().create_and_send_signature(conn, fake_hash, sent_size, session_key)
 
 def run_attack_client(file_path: str):
     print(f"\n[ATTACK] === 해시 변조 공격(Hash Manipulation Attack) ===")
@@ -23,7 +22,7 @@ def run_attack_client(file_path: str):
         print(f"[ATTACK] 파일을 찾을 수 없습니다: {file_path}")
         return
 
-    client = AttackHashClient(file_path)
+    client = AttackHashClient.from_config(file_path)
     try:
         client.transfer()
         print("[ATTACK] 경고: 서버가 공격을 차단하지 않았습니다 (서버 응답 SERVER_OK).")
