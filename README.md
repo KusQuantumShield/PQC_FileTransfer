@@ -53,6 +53,7 @@ PQC_FileTransfer/
 
 1. **의존성 라이브러리 설치:**
     프로젝트 폴더에서 다음 명령어로 필수 패키지를 설치하고 현재 패키지를 설치합니다.
+
     ```bash
     pip install -r requirements.txt
     pip install -e .
@@ -75,6 +76,7 @@ PQC_FileTransfer/
 ```bash
 pqc-tui
 ```
+
 이 화면에서 서버 구동, 클라이언트 구동(파일 선택 포함), 벤치마크 실행을 모두 쉽게 관리하고 실시간 색상 로그를 확인할 수 있습니다.
 
 ### 2. CLI 명령어로 실행하기
@@ -82,15 +84,18 @@ pqc-tui
 CLI 환경이나 백그라운드 구동을 원하실 경우, 개별 명령어를 실행할 수 있습니다.
 
 **서버 실행:**
+
 ```bash
 pqc-server
 # 또는
 python -m pqc_transfer server
 ```
+
 서버는 실행 후 기본 `9999` 포트에서 대기하며, 수신된 파일은 `received_files` 디렉토리에 자동으로 저장됩니다.
 
 **클라이언트 실행:**
 다른 터미널 창을 열고 전송할 파일의 경로를 지정하여 실행합니다.
+
 ```bash
 pqc-client <전송할_파일_경로>
 # 또는
