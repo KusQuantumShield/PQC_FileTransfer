@@ -6,7 +6,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 
 
-CSV_FILENAME = "benchmark_RSA.csv"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_FILENAME = os.path.join(BASE_DIR, "benchmark_RSA.csv")
 ITERATIONS = 100
 
 RSA_KEY_SIZE = 2048
