@@ -2,10 +2,7 @@ import argparse
 import sys
 import os
 
-from .core.client import PQCClient
-from .utils import config, logger, key_manager
-from .ui import gui
-
+from .utils import config, logger
 
 def _log_initialization(mode: str) -> None:
     logger.log("INFO", "SYSTEM", f"--- PQC 파일 전송 {mode} 초기화 ---")
@@ -15,7 +12,13 @@ def _log_initialization(mode: str) -> None:
 
 def run_server(host: str | None = None, port: int | None = None) -> None:
     """
-    서버 프로그램의 진입점(Entry Point)입니다.
+    서버 프로그램의 메인 진입점(Entry Point) 함수입니다.
+    
+    초기 설정을 로깅하고, PQCServer 객체를 생성 및 구동하여 클라이언트 연결 대기를 시작합니다.
+    
+    Args:
+        host (str | None): 바인딩할 서버 호스트 주소. None일 경우 기본 설정값을 사용.
+        port (int | None): 바인딩할 서버 포트 번호. None일 경우 기본 설정값을 사용.
     """
     host = host if host is not None else config.default_config.host
     port = port if port is not None else config.default_config.port
@@ -29,8 +32,14 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
 
 def run_client(file_path: str | None = None) -> None:
     """
-    클라이언트 실행 함수입니다.
-    초기 설정을 로깅하고, 사용자로부터 전송할 파일을 선택받아 PQCClient 인스턴스를 실행합니다.
+    클라이언트 실행 및 파일 전송 진입점 함수입니다.
+    
+    사용자로부터 전송할 파일의 경로를 전달받아 PQCClient 인스턴스를 초기화하고,
+    양자 내성 암호화가 적용된 안전한 파일 전송을 시도합니다.
+    
+    Args:
+        file_path (str | None): 서버로 전송할 대상 파일의 경로. 
+                               입력되지 않거나 존재하지 않는 경로일 경우 에러 로그를 출력하고 중단합니다.
     """
     _log_initialization("클라이언트")
     
@@ -55,18 +64,27 @@ def run_client(file_path: str | None = None) -> None:
 
 
 def main_server():
-    """Entry point for pqc-server script"""
+    """
+    `pqc-server` CLI 명령어 래퍼 함수입니다.
+    """
     run_server()
 
 
 def main_client():
-    """Entry point for pqc-client script"""
+    """
+    `pqc-client` CLI 명령어 래퍼 함수입니다. 
+    명령줄 인자(sys.argv)에서 파일 경로를 추출합니다.
+    """
     file_path = sys.argv[1] if len(sys.argv) > 1 else None
     run_client(file_path)
 
 
 def main():
-    """Entry point for python -m pqc_transfer"""
+    """
+    `python -m pqc_transfer` 명령어로 모듈 직접 실행 시 진입점이 되는 함수입니다.
+    
+    argparse를 통해 모드(server/client), 파일 경로, 호스트, 포트 등을 파싱합니다.
+    """
     parser = argparse.ArgumentParser(description="PQC File Transfer (Quantum-Safe)")
     parser.add_argument("mode", choices=["client", "server"], help="실행 모드를 선택하세요: client 또는 server")
     parser.add_argument("file_path", nargs="?", help="클라이언트 모드일 경우 전송할 파일의 경로")

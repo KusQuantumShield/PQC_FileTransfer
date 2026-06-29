@@ -4,16 +4,19 @@ import sys
 from .file_picker import FilePicker
 from .subprocess_runner import SubprocessRunner
 
-# TUI(Terminal User Interface) 메인 컨트롤러 클래스
-# 각각 분리된 UI 컴포넌트(FilePicker, SubprocessRunner)를 조합하여 메인 메뉴 이벤트 루프를 관리합니다.
 class TUIApp:
+    """
+    TUI(Terminal User Interface) 메인 이벤트 컨트롤러 클래스입니다.
+    
+    각각 분리된 UI 컴포넌트(FilePicker, SubprocessRunner)를 조합하여 
+    메인 메뉴의 이벤트 루프(Event Loop)를 관리합니다.
+    """
     def __init__(self, stdscr):
         """
-        TUIApp 객체 초기화
-        curses 라이브러리를 사용하여 터미널 UI의 색상 쌍(Color Pair)과 기본 설정을 초기화합니다.
+        TUIApp 객체를 초기화하고 curses 색상 쌍(Color Pair) 등 터미널 기본 설정을 구성합니다.
         
         Args:
-            stdscr: curses에서 제공하는 표준 스크린 객체
+            stdscr: curses에서 제공하는 표준 스크린(window) 객체.
         """
         self.stdscr = stdscr
         # 커서를 화면에서 숨김 처리하여 깔끔한 UI 제공
@@ -45,10 +48,11 @@ class TUIApp:
         self.current_row = 0
         self.run()
 
-    def draw_menu(self):
+    def draw_menu(self) -> None:
         """
-        터미널 화면에 메인 메뉴 UI를 그립니다.
-        화면 크기가 변경되거나 선택 항목이 바뀔 때마다 호출되어 화면을 갱신합니다.
+        터미널 화면에 메인 메뉴 UI 위젯을 렌더링합니다.
+        
+        화면 크기가 변경(Resize)되거나 사용자가 선택 항목을 바꿀 때마다 호출되어 화면을 갱신합니다.
         """
         self.stdscr.clear()
         h, w = self.stdscr.getmaxyx() # 현재 터미널의 높이(h)와 너비(w) 구하기
@@ -85,10 +89,12 @@ class TUIApp:
 
 
 
-    def run(self):
+    def run(self) -> None:
         """
-        메인 메뉴의 이벤트 루프. 
-        사용자의 키보드 입력을 처리하고, 선택한 메뉴에 따라 적절한 액션(서버 실행, 파일 전송, 벤치마크, 종료)을 수행합니다.
+        TUI 메인 메뉴의 무한 이벤트 루프를 실행합니다.
+        
+        사용자의 키보드 입력(방향키, 엔터 등)을 처리하고 선택한 메뉴에 따라 
+        서버 실행, 파일 전송, 벤치마크, 종료 등의 적절한 액션을 트리거합니다.
         """
         while True:
             # 매 루프마다 메뉴 화면 다시 그리기
@@ -115,10 +121,11 @@ class TUIApp:
                     # 4. Exit 선택: 루프를 빠져나가 TUI 종료
                     break
 
-def main():
+def main() -> None:
     """
-    TUI 애플리케이션 시작점(Entry Point).
-    curses.wrapper를 사용하여 비정상 종료 시에도 터미널 상태를 원상 복구하도록 안전하게 실행합니다.
+    TUI 애플리케이션의 시작점(Entry Point) 함수입니다.
+    
+    `curses.wrapper`를 사용하여 비정상 종료 시에도 터미널 상태를 원상 복구하도록 안전하게 보호합니다.
     """
     try:
         curses.wrapper(lambda stdscr: TUIApp(stdscr))

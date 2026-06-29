@@ -8,26 +8,41 @@ import typing
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from . import constants
+from .chunk_base import ChunkProcessorBase
 from .. import exceptions
 from ..utils import logger, connection
 
-class ChunkReceiver:
+class ChunkReceiver(ChunkProcessorBase):
+    """
+    네트워크로부터 청크 단위로 데이터를 수신하고 AES-GCM 복호화 및 실시간 압축 해제를 
+    수행하여 임시 파일로 저장하는 클래스입니다.
+    """
     def __init__(self, conn: connection.SecureConnection, session_key: bytes, file_hasher: typing.Any, chunk_size: int = 4 * 1024 * 1024) -> None:
-        self.conn = conn
-        self.aesgcm = AESGCM(session_key)
-        self.file_hasher = file_hasher
-        self.chunk_size = chunk_size
+        super().__init__(conn, session_key, file_hasher, chunk_size)
         
         self.decompressor = zlib.decompressobj()
         self.max_payload_size = self.chunk_size * 2
         self.recv_buffer = bytearray(self.max_payload_size)
         self.recv_view = memoryview(self.recv_buffer)
-        
-        self.header_struct = struct.Struct(constants.HEADER_FORMAT)
-        self.header_buffer = bytearray(constants.HEADER_SIZE)
-        self.header_view = memoryview(self.header_buffer)
 
     def receive(self, original_filesize: int, save_dir: str) -> tuple[str, int]:
+        """
+        스트림 방식으로 연속적인 청크를 수신, 복호화, 무결성 검증, 압축 해제 후 로컬 파일에 기록합니다.
+        
+        Zip Bomb 등의 악의적인 압축 데이터를 방어하기 위한 크기 검증 로직이 포함되어 있습니다.
+        
+        Args:
+            original_filesize (int): 송신 측이 선언한 원본 파일의 크기(기대값).
+            save_dir (str): 수신 중인 파일을 임시로 저장할 디렉토리 경로.
+            
+        Returns:
+            tuple[str, int]: 임시로 저장된 파일의 절대 경로와 실제 누적된 바이트 수.
+            
+        Raises:
+            exceptions.PQCProtocolError: 청크 인덱스 오류, 통신 프로토콜 위반 시.
+            exceptions.PQCIntegrityError: 복호화 실패(변조), 압축 해제 오류 발생 시.
+            exceptions.PQCSecurityError: Zip Bomb 공격 의심 또는 파일 크기가 과도할 경우.
+        """
         os.makedirs(save_dir, exist_ok=True)
         temp_file = tempfile.NamedTemporaryFile(dir=save_dir, delete=False)
         temp_path = temp_file.name

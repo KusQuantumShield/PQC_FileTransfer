@@ -13,7 +13,23 @@ def _build_metadata_payload(client_id: str, filename: str, filesize: int, file_h
 
 def create_and_send_signature(conn: connection.SecureConnection, file_hash: str, client_id: str, filename: str, sent_size: int, session_key: bytes, sig_alg: str, km) -> None:
     """
-    클라이언트 관점의 데이터 서명 및 전송
+    클라이언트가 최종 전송된 파일의 해시와 메타데이터를 취합하여 PQC(ML-DSA) 서명을 생성 및 전송합니다.
+    
+    서버로부터 Replay 공격을 방지하기 위한 Challenge Nonce를 먼저 수신한 뒤,
+    모든 정보를 하나로 묶어 서명(Sign)함으로써 송신자의 신원과 파일의 무결성을 증명합니다.
+    
+    Args:
+        conn (connection.SecureConnection): 서버와 연결된 보안 소켓.
+        file_hash (str): 파일 전송 중 계산된 전체 데이터의 SHA-256 해시값.
+        client_id (str): 클라이언트 고유 식별자.
+        filename (str): 전송된 파일명.
+        sent_size (int): 실제로 송신된 총 데이터 크기(바이트).
+        session_key (bytes): 통신에 사용된 대칭키.
+        sig_alg (str): 전자서명 알고리즘 (예: ML-DSA-44).
+        km: 서명 키쌍을 관리하는 KeyManager.
+        
+    Raises:
+        exceptions.PQCAuthenticationError: 서버가 악의적 요청으로 판단하여 수신을 거부한 경우.
     """
     conn.send_with_length(file_hash.encode("utf-8"))
     
@@ -45,7 +61,24 @@ def create_and_send_signature(conn: connection.SecureConnection, file_hash: str,
 
 def verify_signature(conn: connection.SecureConnection, client_id: str, filename: str, received_size: int, session_key: bytes, file_hash: str, challenge_nonce: str, sig_alg: str, km) -> bool:
     """
-    서버 관점의 클라이언트 서명 검증
+    서버가 클라이언트로부터 받은 파일 해시와 ML-DSA 서명을 통해 무결성과 송신자를 인증합니다.
+    
+    파일 해시의 일치 여부를 1차적으로 검증한 후, Challenge Nonce를 발급합니다.
+    그 뒤 클라이언트가 제출한 공개키의 신뢰성을 검증(TrustStore)하고 서명의 유효성을 확인합니다.
+    
+    Args:
+        conn (connection.SecureConnection): 클라이언트와 연결된 보안 소켓.
+        client_id (str): 수신한 메타데이터 상의 클라이언트 ID.
+        filename (str): 수신된 파일명.
+        received_size (int): 실제로 서버가 수신 및 기록한 파일 크기.
+        session_key (bytes): 통신에 사용된 대칭키.
+        file_hash (str): 서버 측에서 수신 중 직접 계산한 파일의 해시값.
+        challenge_nonce (str): 서버가 클라이언트에게 부여할 난수 챌린지.
+        sig_alg (str): 전자서명 알고리즘 (예: ML-DSA-44).
+        km: 신뢰된 클라이언트 목록을 검증하는 KeyManager.
+        
+    Returns:
+        bool: 서명 및 인증이 성공적으로 완료되었을 경우 True, 그렇지 않으면 False.
     """
     client_file_hash = conn.recv_with_length(max_len=constants.MAX_HASH_LEN).decode("utf-8")
     if client_file_hash != file_hash:

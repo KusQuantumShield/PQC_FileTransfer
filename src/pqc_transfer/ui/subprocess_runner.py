@@ -9,9 +9,25 @@ class SubprocessRunner:
     서브프로세스를 실행하고 그 출력 로그를 실시간으로 터미널에 렌더링하는 UI 컴포넌트입니다.
     """
     def __init__(self, stdscr):
+        """
+        SubprocessRunner 인스턴스를 초기화합니다.
+        
+        Args:
+            stdscr: curses에서 제공하는 표준 스크린(window) 객체.
+        """
         self.stdscr = stdscr
 
-    def run(self, cmd_args, title):
+    def run(self, cmd_args: list[str], title: str) -> None:
+        """
+        주어진 명령어를 서브프로세스로 실행하고 터미널 UI에 실시간 로그를 렌더링합니다.
+        
+        백그라운드 스레드를 생성하여 서브프로세스의 stdout/stderr를 큐(Queue)로 읽어오며,
+        사용자가 'q' 또는 'ESC' 키를 누르면 프로세스를 안전하게 종료하고 빠져나옵니다.
+        
+        Args:
+            cmd_args (list[str]): 실행할 명령어 리스트 (예: ["python3", "-m", "pqc_transfer", "server"]).
+            title (str): UI 상단에 표시될 프로세스 제목.
+        """
         self.stdscr.clear()
         h, w = self.stdscr.getmaxyx()
         

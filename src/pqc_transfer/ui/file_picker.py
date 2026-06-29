@@ -7,9 +7,26 @@ class FilePicker:
     클라이언트에서 서버로 전송할 파일을 방향키로 찾아 선택할 수 있게 합니다.
     """
     def __init__(self, stdscr):
+        """
+        FilePicker 인스턴스를 초기화합니다.
+        
+        Args:
+            stdscr: curses에서 제공하는 표준 스크린(window) 객체.
+        """
         self.stdscr = stdscr
 
-    def show(self, start_path="."):
+    def show(self, start_path: str = ".") -> str | None:
+        """
+        파일 탐색기 UI를 렌더링하고 사용자 입력을 대기합니다.
+        
+        방향키(상/하)로 이동하며 엔터키로 폴더 진입 또는 파일을 선택할 수 있습니다.
+        
+        Args:
+            start_path (str): 파일 탐색기가 처음 열릴 디렉토리 경로. 기본값은 현재 폴더(".").
+            
+        Returns:
+            str | None: 사용자가 최종 선택한 파일의 절대 경로. ESC(취소)를 누르면 None을 반환합니다.
+        """
         current_dir = os.path.abspath(start_path)
         current_idx = 0
         

@@ -6,8 +6,14 @@ from pqc_transfer.utils.connection import SecureConnection
 
 def test_misssign_test(dummy_file):
     """
-    파일 해시(file_hash)가 포함된 서명 데이터가 변조되었을 때 
-    서버가 이를 감지하고 연결을 차단하는지 테스트합니다.
+    클라이언트가 최종 전송하는 파일 해시 기반 서명(ML-DSA Signature)이 변조되었을 때,
+    서버가 무결성 검증 실패를 감지하고 연결을 차단(예외 발생)하는지 테스트합니다.
+    
+    네트워크 전송 함수(`send_with_length`)를 모킹(Mocking)하여,
+    서명 데이터의 바이트를 인위적으로 변경한 뒤 전송합니다.
+    
+    Args:
+        dummy_file (str): 'conftest.py'에서 제공하는 임시 테스트 파일의 경로.
     """
     client = PQCClient.from_config(dummy_file)
     

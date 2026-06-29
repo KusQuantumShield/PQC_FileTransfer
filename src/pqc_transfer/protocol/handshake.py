@@ -10,7 +10,24 @@ import socket
 
 def perform_client_handshake(conn: connection.SecureConnection, server_ip: str, kem_alg: str, sig_alg: str, km) -> bytes:
     """
-    클라이언트 관점의 KEM 핸드셰이크 수행
+    클라이언트 관점에서의 양자 내성(PQC) KEM 핸드셰이크를 수행합니다.
+    
+    서버로부터 KEM 임시 공개키를 수신하여 서명 무결성을 검증한 후, 
+    공유 비밀키(Shared Secret)를 캡슐화하여 서버에 전송합니다.
+    
+    Args:
+        conn (connection.SecureConnection): 보안이 설정된 소켓 연결 객체.
+        server_ip (str): 접속 대상 서버의 IP 주소 (신뢰 확인 용도).
+        kem_alg (str): 키 캡슐화 알고리즘 이름 (예: ML-KEM-512).
+        sig_alg (str): 전자서명 알고리즘 이름 (예: ML-DSA-44).
+        km: 클라이언트 측 KeyManager 인스턴스.
+        
+    Returns:
+        bytes: 도출된 최종 32바이트 세션 키.
+        
+    Raises:
+        exceptions.PQCHandshakeError: 공개키 길이 오류 등 프로토콜 위반 시.
+        exceptions.PQCAuthenticationError: 서버 서명 검증 실패(MitM 의심) 시.
     """
     kem_start_time = time.perf_counter()
     
@@ -71,7 +88,19 @@ def perform_client_handshake(conn: connection.SecureConnection, server_ip: str, 
 
 def perform_server_handshake(conn: connection.SecureConnection, kem_alg: str, sig_alg: str, km) -> bytes:
     """
-    서버 관점의 KEM 핸드셰이크 수행
+    서버 관점에서의 양자 내성(PQC) KEM 핸드셰이크를 수행합니다.
+    
+    서버 고유의 서명키로 서명된 KEM 임시 공개키를 생성 및 클라이언트에게 전송하고, 
+    수신된 암호문을 디캡슐화하여 클라이언트와 동일한 비밀키를 공유합니다.
+    
+    Args:
+        conn (connection.SecureConnection): 보안이 설정된 소켓 연결 객체.
+        kem_alg (str): 키 캡슐화 알고리즘 이름.
+        sig_alg (str): 전자서명 알고리즘 이름.
+        km: 서버 측 KeyManager 인스턴스.
+        
+    Returns:
+        bytes: 도출된 최종 32바이트 세션 키.
     """
     kem_start_time = time.perf_counter()
     

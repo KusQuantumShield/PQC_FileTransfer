@@ -6,8 +6,14 @@ from pqc_transfer.utils.connection import SecureConnection
 
 def test_misskey_test(dummy_file):
     """
-    KEM 암호문(kem_ciphertext)이 변조되었을 때 
-    서버가 이를 감지하고 연결을 차단하는지 테스트합니다.
+    KEM 암호문(kem_ciphertext)이 중간에 변조되었을 때(MitM 공격 시뮬레이션),
+    서버와 클라이언트가 이를 감지하고 연결을 안전하게 차단(예외 발생)하는지 검증합니다.
+    
+    네트워크 전송 함수(`send_with_length`)를 모킹(Mocking)하여,
+    전송되는 KEM 암호문의 첫 바이트를 강제로 변조한 뒤 테스트를 수행합니다.
+    
+    Args:
+        dummy_file (str): 'conftest.py'에서 제공하는 임시 테스트 파일의 경로.
     """
     client = PQCClient.from_config(dummy_file)
     
