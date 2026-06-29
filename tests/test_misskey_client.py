@@ -1,8 +1,10 @@
-import os
 import pytest
 from unittest.mock import patch
 from pqc_transfer.core.client import PQCClient
-from pqc_transfer.utils.connection import SecureConnection
+from pqc_transfer.utils.network import SecureConnection
+from pqc_transfer import exceptions
+import oqs
+from pqc_transfer.utils import config
 
 def test_misskey_client(dummy_file):
     """
@@ -19,9 +21,6 @@ def test_misskey_client(dummy_file):
     
     # 원래의 network.send_with_length 함수 저장
     original_send = SecureConnection.send_with_length
-
-    import oqs
-    from pqc_transfer.utils import config
     
     with oqs.KeyEncapsulation(config.default_config.kem_alg) as kem:
         ct_len = kem.details['length_ciphertext']
@@ -36,8 +35,8 @@ def test_misskey_client(dummy_file):
         return original_send(sock, data)
 
     # network.send_with_length를 모킹하여 전송 가로채기
-    with patch('pqc_transfer.utils.connection.SecureConnection.send_with_length', side_effect=mocked_send, autospec=True):
-        with pytest.raises(Exception):
+    with patch('pqc_transfer.utils.network.SecureConnection.send_with_length', side_effect=mocked_send, autospec=True):
+        with pytest.raises(exceptions.PQCBaseError):
             client.transfer()
         
     # KEM 변조 시 클라이언트는 정상적으로 파일 전송을 완료(finalize_transfer)할 수 없습니다.

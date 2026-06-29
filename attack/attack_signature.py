@@ -1,7 +1,6 @@
 import os
-import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+from pqc_transfer.protocol import signature
 
 from pqc_transfer.core.client import PQCClient
 
@@ -14,7 +13,7 @@ class AttackSignatureClient(PQCClient):
         fake_size = 999999
         
         # 가짜 메타데이터로 서명 생성 및 전송
-        from pqc_transfer.protocol import signature
+        # 서버 측 서명 검증 로직 자체를 모의(Mock)로 우회하는 시뮬레이션
         signature.create_and_send_signature(
             conn,
             file_hash,
@@ -27,7 +26,7 @@ class AttackSignatureClient(PQCClient):
         )
 
 def run_attack_client(file_path: str):
-    print(f"\n[ATTACK] === 서명 변조 공격(Signature Manipulation Attack) ===")
+    print("--- 서명 위조 공격 (Authentication Attack) 시작 ---")
     
     if not os.path.exists(file_path):
         print(f"[ATTACK] 파일을 찾을 수 없습니다: {file_path}")

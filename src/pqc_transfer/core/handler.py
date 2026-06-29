@@ -6,13 +6,13 @@ import hashlib
 import threading
 import re
 
-CLIENT_ID_PATTERN = re.compile(r'^[\w-]+$')
-
 from ..protocol import constants, chunk_receiver, handshake, signature, metadata
 from .. import exceptions
-from ..utils import logger, connection
+from ..utils import logger, network
 from ..utils.config import AppConfig
 from ..utils.key_manager import KeyManager
+
+CLIENT_ID_PATTERN = re.compile(r'^[\w-]+$')
 
 class PQCServerHandler:
     """
@@ -22,7 +22,7 @@ class PQCServerHandler:
     분리하고 예외 버블링 패턴을 통해 유지보수성과 가독성을 극대화했습니다.
     """
     def __init__(self, raw_conn: socket.socket, addr, file_save_lock: threading.Lock, app_config: AppConfig, key_manager: KeyManager):
-        self.conn = connection.SecureConnection(raw_conn, is_server=True)
+        self.conn = network.SecureConnection(raw_conn, is_server=True)
         self.addr = addr
         self.file_save_lock = file_save_lock
         self.config = app_config

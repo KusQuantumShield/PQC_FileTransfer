@@ -3,6 +3,7 @@ import os
 import subprocess
 import threading
 import queue
+import re
 
 class SubprocessRunner:
     """
@@ -49,7 +50,6 @@ class SubprocessRunner:
             proc.stdout.close()
             q.put(None)
 
-        import re
         ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
         
         env = os.environ.copy()

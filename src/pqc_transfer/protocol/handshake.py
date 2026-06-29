@@ -2,13 +2,13 @@ import struct
 import time
 import oqs
 
-from ..utils import config, crypto, key_manager, logger, connection
+from ..utils import config, crypto, key_manager, logger, network
 from .. import exceptions
 from . import constants
 
 import socket
 
-def perform_client_handshake(conn: connection.SecureConnection, server_ip: str, kem_alg: str, sig_alg: str, km) -> bytes:
+def perform_client_handshake(conn: network.SecureConnection, server_ip: str, kem_alg: str, sig_alg: str, km) -> bytes:
     """
     클라이언트 관점에서의 양자 내성(PQC) KEM 핸드셰이크를 수행합니다.
     
@@ -16,7 +16,7 @@ def perform_client_handshake(conn: connection.SecureConnection, server_ip: str, 
     공유 비밀키(Shared Secret)를 캡슐화하여 서버에 전송합니다.
     
     Args:
-        conn (connection.SecureConnection): 보안이 설정된 소켓 연결 객체.
+        conn (network.SecureConnection): 보안이 설정된 소켓 연결 객체.
         server_ip (str): 접속 대상 서버의 IP 주소 (신뢰 확인 용도).
         kem_alg (str): 키 캡슐화 알고리즘 이름 (예: ML-KEM-512).
         sig_alg (str): 전자서명 알고리즘 이름 (예: ML-DSA-44).
@@ -86,7 +86,7 @@ def perform_client_handshake(conn: connection.SecureConnection, server_ip: str, 
     
     return session_key
 
-def perform_server_handshake(conn: connection.SecureConnection, kem_alg: str, sig_alg: str, km) -> bytes:
+def perform_server_handshake(conn: network.SecureConnection, kem_alg: str, sig_alg: str, km) -> bytes:
     """
     서버 관점에서의 양자 내성(PQC) KEM 핸드셰이크를 수행합니다.
     
@@ -94,7 +94,7 @@ def perform_server_handshake(conn: connection.SecureConnection, kem_alg: str, si
     수신된 암호문을 디캡슐화하여 클라이언트와 동일한 비밀키를 공유합니다.
     
     Args:
-        conn (connection.SecureConnection): 보안이 설정된 소켓 연결 객체.
+        conn (network.SecureConnection): 보안이 설정된 소켓 연결 객체.
         kem_alg (str): 키 캡슐화 알고리즘 이름.
         sig_alg (str): 전자서명 알고리즘 이름.
         km: 서버 측 KeyManager 인스턴스.

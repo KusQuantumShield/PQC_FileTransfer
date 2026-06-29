@@ -10,14 +10,14 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from . import constants
 from .chunk_base import ChunkProcessorBase
 from .. import exceptions
-from ..utils import logger, connection
+from ..utils import logger, network
 
 class ChunkReceiver(ChunkProcessorBase):
     """
     네트워크로부터 청크 단위로 데이터를 수신하고 AES-GCM 복호화 및 실시간 압축 해제를 
     수행하여 임시 파일로 저장하는 클래스입니다.
     """
-    def __init__(self, conn: connection.SecureConnection, session_key: bytes, file_hasher: typing.Any, chunk_size: int = 4 * 1024 * 1024) -> None:
+    def __init__(self, conn: network.SecureConnection, session_key: bytes, file_hasher: typing.Any, chunk_size: int = 4 * 1024 * 1024) -> None:
         super().__init__(conn, session_key, file_hasher, chunk_size)
         
         self.decompressor = zlib.decompressobj()

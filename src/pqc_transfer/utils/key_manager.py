@@ -5,7 +5,6 @@ import uuid
 
 import oqs
 
-from . import config
 from . import logger
 
 class KeyStore:

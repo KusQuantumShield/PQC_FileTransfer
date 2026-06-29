@@ -4,7 +4,7 @@ import hashlib
 
 from ..protocol import chunk_sender, handshake, signature, metadata
 from .. import exceptions
-from ..utils import logger, connection
+from ..utils import logger, network, config
 from ..utils.config import AppConfig
 from ..utils.key_manager import KeyManager
 
@@ -23,9 +23,6 @@ class PQCClient:
         환경 변수 및 기본 설정(config.py)을 기반으로 클라이언트를 손쉽게 생성하는 팩토리 메서드입니다.
         이를 통해 DI 구조를 유지하면서도 호출부의 복잡도를 낮추어 유지보수성을 향상시킵니다.
         """
-        from ..utils import config
-        from ..utils.key_manager import KeyManager
-        
         km = KeyManager(key_dir=config.default_config.key_dir, sig_alg=config.default_config.sig_alg)
         
         return cls(
@@ -63,7 +60,7 @@ class PQCClient:
         """
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw_sock:
-                with connection.SecureConnection(raw_sock, is_server=False) as conn:
+                with network.SecureConnection(raw_sock, is_server=False) as conn:
                     conn.sock.connect((self.config.server_ip, self.config.port))
                     logger.log("INFO", "CONNECT", f"서버 {self.config.server_ip}:{self.config.port}에 연결되었습니다")
 
@@ -84,33 +81,33 @@ class PQCClient:
             logger.log("ERROR", "CLIENT", str(e), exc_info=True)
             raise
 
-    def perform_handshake(self, conn: connection.SecureConnection) -> bytes:
+    def perform_handshake(self, conn: network.SecureConnection) -> bytes:
         """
         [단계 1] KEM 키 생성 및 서버와의 교환을 수행하여 세션 키를 생성합니다.
         
         Args:
-            conn (connection.SecureConnection): 보안이 설정된 소켓 연결 객체.
+            conn (network.SecureConnection): 보안이 설정된 소켓 연결 객체.
             
         Returns:
             bytes: 생성된 32바이트 세션 키.
         """
         return handshake.perform_client_handshake(conn, self.config.server_ip, self.config.kem_alg, self.config.sig_alg, self.key_manager)
 
-    def send_metadata(self, conn: connection.SecureConnection):
+    def send_metadata(self, conn: network.SecureConnection):
         """
         파일 전송 전, 파일 이름과 파일 크기 등 초기 메타데이터를 서버로 전송합니다.
         
         Args:
-            conn (connection.SecureConnection): 보안이 설정된 소켓 연결 객체.
+            conn (network.SecureConnection): 보안이 설정된 소켓 연결 객체.
         """
         metadata.send_metadata(conn, self.client_id, self.filename, self.filesize)
 
-    def transfer_file_chunks(self, conn: connection.SecureConnection, session_key: bytes) -> tuple[int, str]:
+    def transfer_file_chunks(self, conn: network.SecureConnection, session_key: bytes) -> tuple[int, str]:
         """
         [단계 3] 파일을 청크 단위로 나누어 압축 및 AES-GCM 암호화 후 서버로 전송합니다.
         
         Args:
-            conn (connection.SecureConnection): 보안이 설정된 소켓 연결 객체.
+            conn (network.SecureConnection): 보안이 설정된 소켓 연결 객체.
             session_key (bytes): 통신에 사용할 대칭키(세션 키).
             
         Returns:
@@ -125,7 +122,7 @@ class PQCClient:
         )
         return sent_size, file_hash
 
-    def create_and_send_signature(self, conn: connection.SecureConnection, file_hash: str, sent_size: int, session_key: bytes):
+    def create_and_send_signature(self, conn: network.SecureConnection, file_hash: str, sent_size: int, session_key: bytes):
         signature.create_and_send_signature(
             conn,
             file_hash,
@@ -137,12 +134,12 @@ class PQCClient:
             self.key_manager
         )
 
-    def finalize_transfer(self, conn: connection.SecureConnection):
+    def finalize_transfer(self, conn: network.SecureConnection):
         """
         [단계 6] 전송 완료 및 종료를 처리합니다.
         
         Args:
-            conn (connection.SecureConnection): 보안이 설정된 소켓 연결 객체.
+            conn (network.SecureConnection): 보안이 설정된 소켓 연결 객체.
             
         Raises:
             exceptions.PQCProtocolError: 서버 측에서 수신을 거부하거나 오류를 반환한 경우.

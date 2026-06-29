@@ -3,8 +3,6 @@ import os
 import csv
 import oqs
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 from pqc_transfer.utils import config, crypto
 
 

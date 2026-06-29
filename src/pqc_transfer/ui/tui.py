@@ -1,5 +1,6 @@
 import curses
 import sys
+import os
 
 from .file_picker import FilePicker
 from .subprocess_runner import SubprocessRunner
@@ -116,7 +117,9 @@ class TUIApp:
                     if file_to_send:
                         SubprocessRunner(self.stdscr).run([sys.executable, "-m", "pqc_transfer", "client", file_to_send], "PQC Client Logs")
                 elif self.current_row == 2:
-                    SubprocessRunner(self.stdscr).run([sys.executable, "benchmarks/benchmark.py"], "Benchmark Logs")
+                    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+                    benchmark_path = os.path.join(project_root, 'benchmarks', 'benchmark.py')
+                    SubprocessRunner(self.stdscr).run([sys.executable, benchmark_path], "Benchmark Logs")
                 elif self.current_row == 3:
                     # 4. Exit 선택: 루프를 빠져나가 TUI 종료
                     break

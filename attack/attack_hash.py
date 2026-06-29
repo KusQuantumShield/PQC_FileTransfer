@@ -1,7 +1,4 @@
 import os
-import sys
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from pqc_transfer.core.client import PQCClient
 
@@ -16,7 +13,7 @@ class AttackHashClient(PQCClient):
         super().create_and_send_signature(conn, fake_hash, sent_size, session_key)
 
 def run_attack_client(file_path: str):
-    print(f"\n[ATTACK] === 해시 변조 공격(Hash Manipulation Attack) ===")
+    print("\n[ATTACK] === 해시 변조 공격(Hash Manipulation Attack) ===")
     
     if not os.path.exists(file_path):
         print(f"[ATTACK] 파일을 찾을 수 없습니다: {file_path}")

@@ -2,9 +2,10 @@ import socket
 import threading
 
 from ..protocol import constants
-from ..utils import logger
+from ..utils import logger, config
 from ..utils.config import AppConfig
 from ..utils.key_manager import KeyManager
+from concurrent.futures import ThreadPoolExecutor
 from .handler import PQCServerHandler
 
 class PQCServer:
@@ -27,9 +28,6 @@ class PQCServer:
         Returns:
             PQCServer: 설정된 PQCServer 인스턴스.
         """
-        from ..utils import config
-        from ..utils.key_manager import KeyManager
-        
         app_config = config.default_config
         if host is not None:
             app_config.host = host
@@ -64,8 +62,6 @@ class PQCServer:
         멀티스레딩(ThreadPoolExecutor)과 세마포어(Semaphore)를 활용하여 
         정의된 최대 동시 접속자 수(`max_concurrent_clients`)까지만 안전하게 요청을 처리합니다.
         """
-        from concurrent.futures import ThreadPoolExecutor
-
         connection_semaphore = threading.Semaphore(self.max_concurrent_clients)
         executor = ThreadPoolExecutor(max_workers=self.max_concurrent_clients)
 

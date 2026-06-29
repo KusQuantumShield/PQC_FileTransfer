@@ -2,8 +2,9 @@ import logging
 import sys
 import queue
 import atexit
-import threading
+import os
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
+from .config import default_config
 
 _COLORS = {
     "INFO": "\033[94m",
@@ -46,8 +47,14 @@ def setup_logger() -> None:
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(ColorFormatter())
     
+
+    
+    log_dir = default_config.save_dir
+    os.makedirs(log_dir, exist_ok=True)
+    log_file_path = os.path.join(log_dir, "pqc_transfer.log")
+    
     file_handler = RotatingFileHandler(
-        "pqc_transfer.log", 
+        log_file_path, 
         maxBytes=10 * 1024 * 1024,
         backupCount=5,
         encoding="utf-8"

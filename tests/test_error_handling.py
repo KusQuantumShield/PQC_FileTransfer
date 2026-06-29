@@ -1,6 +1,4 @@
 import pytest
-import os
-import socket
 from unittest.mock import patch, MagicMock
 
 from pqc_transfer.core.client import PQCClient

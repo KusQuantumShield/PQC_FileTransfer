@@ -1,6 +1,7 @@
 import os
 import filecmp
 from pqc_transfer.core.client import PQCClient
+from pqc_transfer.utils import config
 
 def test_successful_transfer(dummy_file):
     """
@@ -12,11 +13,7 @@ def test_successful_transfer(dummy_file):
     """
     client = PQCClient.from_config(dummy_file)
     client.transfer()
-    
-    from pqc_transfer.utils import config
-    
     filename = os.path.basename(dummy_file)
-    save_dir = config.default_config.save_dir
     received_file_path = os.path.join(config.default_config.save_dir, filename)
     
     assert os.path.exists(config.default_config.save_dir), "저장 디렉토리가 생성되어야 합니다."

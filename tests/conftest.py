@@ -2,6 +2,7 @@ import pytest
 import subprocess
 import time
 import os
+import sys
 
 @pytest.fixture(scope="session", autouse=True)
 def start_server():
@@ -21,7 +22,7 @@ def start_server():
         env['PYTHONPATH'] = src_path
     
     cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    process = subprocess.Popen(["python3", "-m", "pqc_transfer", "server"], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    process = subprocess.Popen([sys.executable, "-m", "pqc_transfer", "server"], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     
     time.sleep(1.0)
     

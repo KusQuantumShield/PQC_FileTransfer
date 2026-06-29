@@ -3,6 +3,8 @@ import sys
 import os
 
 from .utils import config, logger
+from .core.server import PQCServer
+from .core.client import PQCClient
 
 def _log_initialization(mode: str) -> None:
     logger.log("INFO", "SYSTEM", f"--- PQC 파일 전송 {mode} 초기화 ---")
@@ -24,7 +26,6 @@ def run_server(host: str | None = None, port: int | None = None) -> None:
     port = port if port is not None else config.default_config.port
 
     _log_initialization("서버")
-    from .core.server import PQCServer
     
     server = PQCServer.from_config(host=host, port=port)
     server.start()
@@ -53,8 +54,6 @@ def run_client(file_path: str | None = None) -> None:
         return
 
     try:
-        from .core.client import PQCClient
-        
         client = PQCClient.from_config(file_path=file_path)
         client.transfer()
         logger.log("INFO", "CLI", f"파일 전송이 완료되었습니다: {client.filename}")

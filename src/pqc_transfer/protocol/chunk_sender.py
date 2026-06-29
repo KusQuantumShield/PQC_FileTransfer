@@ -8,13 +8,13 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from . import constants
 from .chunk_base import ChunkProcessorBase
-from ..utils import logger, connection
+from ..utils import logger, network
 
 class ChunkSender(ChunkProcessorBase):
     """
     파일 데이터를 청크(Chunk) 단위로 분할하여 압축 및 암호화한 뒤 전송하는 클래스입니다.
     """
-    def __init__(self, conn: connection.SecureConnection, session_key: bytes, file_hasher: typing.Any, chunk_size: int = 4 * 1024 * 1024) -> None:
+    def __init__(self, conn: network.SecureConnection, session_key: bytes, file_hasher: typing.Any, chunk_size: int = 4 * 1024 * 1024) -> None:
         super().__init__(conn, session_key, file_hasher, chunk_size)
         
         self.nonce_struct = struct.Struct(constants.NONCE_PREFIX_FORMAT)
