@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 BASE_DIR = Path(__file__).resolve().parent
-PQC_CSV = BASE_DIR / "Benchmark Results.csv"
+PQC_CSV = BASE_DIR / "benchmark_results.csv"
 RSA_CSV = BASE_DIR / "benchmark_RSA.csv"
 
 OUTPUT_DIR = BASE_DIR / "comparison_graphs"

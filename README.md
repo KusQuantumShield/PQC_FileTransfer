@@ -118,7 +118,7 @@ python -m pqc_transfer client <전송할_파일_경로>
 - **기본 성능 측정 (터미널 출력):** `python benchmarks/benchmark.py`
 - **상세 성능 측정 (CSV 파일 저장 포함):** `python benchmarks/benchmark_perform.py`
 - **기존 RSA/ECC 성능 측정 (비교용):** `python benchmarks/benchmark_RSA.py`
-- **성능 비교 그래프 생성:** `python benchmarks/Compare_graph.py`
+- **성능 비교 그래프 생성:** `python benchmarks/compare_graph.py`
 
 ## 📝 로그 및 모니터링
 

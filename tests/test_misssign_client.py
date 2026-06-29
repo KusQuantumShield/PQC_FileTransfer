@@ -4,7 +4,7 @@ from unittest.mock import patch
 from pqc_transfer.core.client import PQCClient
 from pqc_transfer.utils.connection import SecureConnection
 
-def test_misssign_test(dummy_file):
+def test_misssign_client(dummy_file):
     """
     클라이언트가 최종 전송하는 파일 해시 기반 서명(ML-DSA Signature)이 변조되었을 때,
     서버가 무결성 검증 실패를 감지하고 연결을 차단(예외 발생)하는지 테스트합니다.

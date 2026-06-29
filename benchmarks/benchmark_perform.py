@@ -9,7 +9,7 @@ from pqc_transfer.utils import config, crypto
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_FILENAME = os.path.join(BASE_DIR, "Benchmark Results.csv")
+CSV_FILENAME = os.path.join(BASE_DIR, "benchmark_results.csv")
 
 
 def save_results_to_csv(results, filename=CSV_FILENAME):
