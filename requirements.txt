@@ -1,2 +1,14 @@
+# --- PQC File Transfer 프로젝트 필수 의존성 ---
+# 1. 핵심 보안 및 암호화 라이브러리
 cryptography>=49.0.0
 liboqs-python>=0.15.0
+
+# 2. Windows 환경에서 TUI(터미널 UI) 실행을 위한 필수 패키지
+windows-curses; sys_platform == 'win32'
+
+# 3. 공격 테스트 및 벤치마크(성능 측정) 실행을 위한 필수 패키지
+pytest>=7.0.0
+matplotlib>=3.11.0
+
+# (선택) 현재 프로젝트를 전역 명령어(pqc-server 등)로 사용하려면 아래 주석을 해제하세요.
+# -e .

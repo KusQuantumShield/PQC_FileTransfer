@@ -44,6 +44,7 @@ pqc_transfer.log
 received_files/
 dummy_keys/
 benchmarks/*.csv
+benchmarks/comparison_graphs/
 /test_*.txt
 /benchmark_results.csv
 
