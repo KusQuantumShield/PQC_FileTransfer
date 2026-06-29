@@ -6,6 +6,14 @@ import os
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from .config import default_config
 
+# Windows 환경에서 ANSI 색상 코드(터미널 색상) 출력을 위해 colorama 초기화
+if os.name == "nt":
+    try:
+        import colorama
+        colorama.init()
+    except ImportError:
+        pass
+
 _COLORS = {
     "INFO": "\033[94m",
     "PASS": "\033[92m",

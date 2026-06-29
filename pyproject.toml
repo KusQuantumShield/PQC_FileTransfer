@@ -9,13 +9,14 @@ description = "A Post-Quantum Cryptography (PQC) File Transfer Protocol"
 authors = [{ name = "AgCat", email = "rkdqudwl0627@naver.com" }]
 requires-python = ">=3.9"
 dependencies = [
-    "cryptography>=49.0.0",
+    "cryptography>=46.0.0",
     "liboqs-python>=0.15.0",
-    "windows-curses; sys_platform == 'win32'"
+    "windows-curses; sys_platform == 'win32'",
+    "colorama; sys_platform == 'win32'"
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0.0", "matplotlib>=3.11.0"]
+dev = ["pytest>=7.0.0", "matplotlib>=3.10.0"]
 
 [project.scripts]
 pqc-server = "pqc_transfer.cli:main_server"
